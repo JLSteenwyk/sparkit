@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sparkit"
+version = "0.1.0"
+description = "STEM literature fetching and reviewing agent"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
+  "pydantic>=2.8.0",
+  "httpx>=0.27.0",
+  "datasets>=2.19.0",
+  "psycopg[binary]>=3.2.0",
+  "alembic>=1.13.0",
+  "sqlalchemy>=2.0.0",
+  "pytest>=8.0.0",
+  "beautifulsoup4>=4.12.0",
+  "pypdf>=4.2.0"
+]
+
+[tool.setuptools]
+packages = [
+  "services",
+  "services.api_gateway",
+  "services.api_gateway.app",
+  "services.orchestrator",
+  "services.orchestrator.app",
+  "services.orchestrator.app.providers",
+  "services.retrieval_service",
+  "services.retrieval_service.app",
+  "services.ingestion_service",
+  "services.ingestion_service.app",
+  "services.eval_service",
+  "services.eval_service.app",
+  "shared",
+  "shared.schemas"
+]

@@ -1,0 +1,11 @@
+[
+  {
+    "source": "semantic_scholar",
+    "title": "Semantic Scholar GNN Benchmark",
+    "abstract": "Benchmark dataset and methods.",
+    "authors": ["E. Author"],
+    "year": 2025,
+    "doi": "10.1000/ss111",
+    "url": "https://www.semanticscholar.org/paper/ss111"
+  }
+]

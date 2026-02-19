@@ -1,0 +1,3602 @@
+[
+  {
+    "id": "q001",
+    "question": "Explain the current evidence and mechanisms for superconducting qubit coherence in modern experimental and computational physics.",
+    "domain": "physics",
+    "subdomain": "quantum_information",
+    "required_keywords": [
+      "decoherence",
+      "flux noise",
+      "dielectric loss"
+    ],
+    "optional_keywords": [
+      "transmon",
+      "TLS",
+      "error correction"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q002",
+    "question": "Compare leading methods for superconducting qubit coherence in modern experimental and computational physics, including known tradeoffs.",
+    "domain": "physics",
+    "subdomain": "quantum_information",
+    "required_keywords": [
+      "decoherence",
+      "flux noise",
+      "dielectric loss"
+    ],
+    "optional_keywords": [
+      "transmon",
+      "TLS",
+      "error correction"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q003",
+    "question": "What are major failure modes and mitigation strategies for superconducting qubit coherence in modern experimental and computational physics?",
+    "domain": "physics",
+    "subdomain": "quantum_information",
+    "required_keywords": [
+      "decoherence",
+      "flux noise",
+      "dielectric loss"
+    ],
+    "optional_keywords": [
+      "transmon",
+      "TLS",
+      "error correction"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q004",
+    "question": "Summarize benchmarked progress on superconducting qubit coherence in modern experimental and computational physics and identify open problems.",
+    "domain": "physics",
+    "subdomain": "quantum_information",
+    "required_keywords": [
+      "decoherence",
+      "flux noise",
+      "dielectric loss"
+    ],
+    "optional_keywords": [
+      "transmon",
+      "TLS",
+      "error correction"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q005",
+    "question": "Explain the current evidence and mechanisms for topological phases in quantum materials in modern experimental and computational physics.",
+    "domain": "physics",
+    "subdomain": "condensed_matter",
+    "required_keywords": [
+      "topological",
+      "band structure",
+      "edge states"
+    ],
+    "optional_keywords": [
+      "Berry phase",
+      "Chern",
+      "transport"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q006",
+    "question": "Compare leading methods for topological phases in quantum materials in modern experimental and computational physics, including known tradeoffs.",
+    "domain": "physics",
+    "subdomain": "condensed_matter",
+    "required_keywords": [
+      "topological",
+      "band structure",
+      "edge states"
+    ],
+    "optional_keywords": [
+      "Berry phase",
+      "Chern",
+      "transport"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q007",
+    "question": "What are major failure modes and mitigation strategies for topological phases in quantum materials in modern experimental and computational physics?",
+    "domain": "physics",
+    "subdomain": "condensed_matter",
+    "required_keywords": [
+      "topological",
+      "band structure",
+      "edge states"
+    ],
+    "optional_keywords": [
+      "Berry phase",
+      "Chern",
+      "transport"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q008",
+    "question": "Summarize benchmarked progress on topological phases in quantum materials in modern experimental and computational physics and identify open problems.",
+    "domain": "physics",
+    "subdomain": "condensed_matter",
+    "required_keywords": [
+      "topological",
+      "band structure",
+      "edge states"
+    ],
+    "optional_keywords": [
+      "Berry phase",
+      "Chern",
+      "transport"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q009",
+    "question": "Explain the current evidence and mechanisms for magnetic confinement fusion stability in modern experimental and computational physics.",
+    "domain": "physics",
+    "subdomain": "plasma",
+    "required_keywords": [
+      "tokamak",
+      "instability",
+      "confinement"
+    ],
+    "optional_keywords": [
+      "ELM",
+      "transport",
+      "disruption"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q010",
+    "question": "Compare leading methods for magnetic confinement fusion stability in modern experimental and computational physics, including known tradeoffs.",
+    "domain": "physics",
+    "subdomain": "plasma",
+    "required_keywords": [
+      "tokamak",
+      "instability",
+      "confinement"
+    ],
+    "optional_keywords": [
+      "ELM",
+      "transport",
+      "disruption"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q011",
+    "question": "What are major failure modes and mitigation strategies for magnetic confinement fusion stability in modern experimental and computational physics?",
+    "domain": "physics",
+    "subdomain": "plasma",
+    "required_keywords": [
+      "tokamak",
+      "instability",
+      "confinement"
+    ],
+    "optional_keywords": [
+      "ELM",
+      "transport",
+      "disruption"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q012",
+    "question": "Summarize benchmarked progress on magnetic confinement fusion stability in modern experimental and computational physics and identify open problems.",
+    "domain": "physics",
+    "subdomain": "plasma",
+    "required_keywords": [
+      "tokamak",
+      "instability",
+      "confinement"
+    ],
+    "optional_keywords": [
+      "ELM",
+      "transport",
+      "disruption"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q013",
+    "question": "Explain the current evidence and mechanisms for gravitational-wave source inference in modern experimental and computational physics.",
+    "domain": "physics",
+    "subdomain": "astrophysics",
+    "required_keywords": [
+      "waveform",
+      "parameter estimation",
+      "detector"
+    ],
+    "optional_keywords": [
+      "LIGO",
+      "Bayesian",
+      "noise"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q014",
+    "question": "Compare leading methods for gravitational-wave source inference in modern experimental and computational physics, including known tradeoffs.",
+    "domain": "physics",
+    "subdomain": "astrophysics",
+    "required_keywords": [
+      "waveform",
+      "parameter estimation",
+      "detector"
+    ],
+    "optional_keywords": [
+      "LIGO",
+      "Bayesian",
+      "noise"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q015",
+    "question": "What are major failure modes and mitigation strategies for gravitational-wave source inference in modern experimental and computational physics?",
+    "domain": "physics",
+    "subdomain": "astrophysics",
+    "required_keywords": [
+      "waveform",
+      "parameter estimation",
+      "detector"
+    ],
+    "optional_keywords": [
+      "LIGO",
+      "Bayesian",
+      "noise"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q016",
+    "question": "Summarize benchmarked progress on gravitational-wave source inference in modern experimental and computational physics and identify open problems.",
+    "domain": "physics",
+    "subdomain": "astrophysics",
+    "required_keywords": [
+      "waveform",
+      "parameter estimation",
+      "detector"
+    ],
+    "optional_keywords": [
+      "LIGO",
+      "Bayesian",
+      "noise"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q017",
+    "question": "Explain the current evidence and mechanisms for integrated nonlinear photonics in modern experimental and computational physics.",
+    "domain": "physics",
+    "subdomain": "photonics",
+    "required_keywords": [
+      "waveguide",
+      "nonlinear",
+      "frequency conversion"
+    ],
+    "optional_keywords": [
+      "dispersion",
+      "Q factor",
+      "microresonator"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q018",
+    "question": "Compare leading methods for integrated nonlinear photonics in modern experimental and computational physics, including known tradeoffs.",
+    "domain": "physics",
+    "subdomain": "photonics",
+    "required_keywords": [
+      "waveguide",
+      "nonlinear",
+      "frequency conversion"
+    ],
+    "optional_keywords": [
+      "dispersion",
+      "Q factor",
+      "microresonator"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q019",
+    "question": "What are major failure modes and mitigation strategies for integrated nonlinear photonics in modern experimental and computational physics?",
+    "domain": "physics",
+    "subdomain": "photonics",
+    "required_keywords": [
+      "waveguide",
+      "nonlinear",
+      "frequency conversion"
+    ],
+    "optional_keywords": [
+      "dispersion",
+      "Q factor",
+      "microresonator"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q020",
+    "question": "Summarize benchmarked progress on integrated nonlinear photonics in modern experimental and computational physics and identify open problems.",
+    "domain": "physics",
+    "subdomain": "photonics",
+    "required_keywords": [
+      "waveguide",
+      "nonlinear",
+      "frequency conversion"
+    ],
+    "optional_keywords": [
+      "dispersion",
+      "Q factor",
+      "microresonator"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q021",
+    "question": "Explain the current evidence and mechanisms for electrocatalyst design for CO2 reduction in molecular and materials chemistry.",
+    "domain": "chemistry",
+    "subdomain": "catalysis",
+    "required_keywords": [
+      "catalyst",
+      "selectivity",
+      "overpotential"
+    ],
+    "optional_keywords": [
+      "Faradaic efficiency",
+      "active site",
+      "stability"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q022",
+    "question": "Compare leading methods for electrocatalyst design for CO2 reduction in molecular and materials chemistry, including known tradeoffs.",
+    "domain": "chemistry",
+    "subdomain": "catalysis",
+    "required_keywords": [
+      "catalyst",
+      "selectivity",
+      "overpotential"
+    ],
+    "optional_keywords": [
+      "Faradaic efficiency",
+      "active site",
+      "stability"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q023",
+    "question": "What are major failure modes and mitigation strategies for electrocatalyst design for CO2 reduction in molecular and materials chemistry?",
+    "domain": "chemistry",
+    "subdomain": "catalysis",
+    "required_keywords": [
+      "catalyst",
+      "selectivity",
+      "overpotential"
+    ],
+    "optional_keywords": [
+      "Faradaic efficiency",
+      "active site",
+      "stability"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q024",
+    "question": "Summarize benchmarked progress on electrocatalyst design for CO2 reduction in molecular and materials chemistry and identify open problems.",
+    "domain": "chemistry",
+    "subdomain": "catalysis",
+    "required_keywords": [
+      "catalyst",
+      "selectivity",
+      "overpotential"
+    ],
+    "optional_keywords": [
+      "Faradaic efficiency",
+      "active site",
+      "stability"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q025",
+    "question": "Explain the current evidence and mechanisms for DFT-based reaction pathway prediction in molecular and materials chemistry.",
+    "domain": "chemistry",
+    "subdomain": "computational_chemistry",
+    "required_keywords": [
+      "DFT",
+      "transition state",
+      "energy barrier"
+    ],
+    "optional_keywords": [
+      "functional",
+      "solvation",
+      "validation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q026",
+    "question": "Compare leading methods for DFT-based reaction pathway prediction in molecular and materials chemistry, including known tradeoffs.",
+    "domain": "chemistry",
+    "subdomain": "computational_chemistry",
+    "required_keywords": [
+      "DFT",
+      "transition state",
+      "energy barrier"
+    ],
+    "optional_keywords": [
+      "functional",
+      "solvation",
+      "validation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q027",
+    "question": "What are major failure modes and mitigation strategies for DFT-based reaction pathway prediction in molecular and materials chemistry?",
+    "domain": "chemistry",
+    "subdomain": "computational_chemistry",
+    "required_keywords": [
+      "DFT",
+      "transition state",
+      "energy barrier"
+    ],
+    "optional_keywords": [
+      "functional",
+      "solvation",
+      "validation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q028",
+    "question": "Summarize benchmarked progress on DFT-based reaction pathway prediction in molecular and materials chemistry and identify open problems.",
+    "domain": "chemistry",
+    "subdomain": "computational_chemistry",
+    "required_keywords": [
+      "DFT",
+      "transition state",
+      "energy barrier"
+    ],
+    "optional_keywords": [
+      "functional",
+      "solvation",
+      "validation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q029",
+    "question": "Explain the current evidence and mechanisms for polymer electrolyte transport in molecular and materials chemistry.",
+    "domain": "chemistry",
+    "subdomain": "polymer",
+    "required_keywords": [
+      "ionic conductivity",
+      "polymer",
+      "electrolyte"
+    ],
+    "optional_keywords": [
+      "segmental motion",
+      "salt",
+      "battery"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q030",
+    "question": "Compare leading methods for polymer electrolyte transport in molecular and materials chemistry, including known tradeoffs.",
+    "domain": "chemistry",
+    "subdomain": "polymer",
+    "required_keywords": [
+      "ionic conductivity",
+      "polymer",
+      "electrolyte"
+    ],
+    "optional_keywords": [
+      "segmental motion",
+      "salt",
+      "battery"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q031",
+    "question": "What are major failure modes and mitigation strategies for polymer electrolyte transport in molecular and materials chemistry?",
+    "domain": "chemistry",
+    "subdomain": "polymer",
+    "required_keywords": [
+      "ionic conductivity",
+      "polymer",
+      "electrolyte"
+    ],
+    "optional_keywords": [
+      "segmental motion",
+      "salt",
+      "battery"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q032",
+    "question": "Summarize benchmarked progress on polymer electrolyte transport in molecular and materials chemistry and identify open problems.",
+    "domain": "chemistry",
+    "subdomain": "polymer",
+    "required_keywords": [
+      "ionic conductivity",
+      "polymer",
+      "electrolyte"
+    ],
+    "optional_keywords": [
+      "segmental motion",
+      "salt",
+      "battery"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q033",
+    "question": "Explain the current evidence and mechanisms for ultrafast spectroscopy for charge transfer in molecular and materials chemistry.",
+    "domain": "chemistry",
+    "subdomain": "spectroscopy",
+    "required_keywords": [
+      "spectroscopy",
+      "excited state",
+      "charge transfer"
+    ],
+    "optional_keywords": [
+      "femtosecond",
+      "kinetics",
+      "relaxation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q034",
+    "question": "Compare leading methods for ultrafast spectroscopy for charge transfer in molecular and materials chemistry, including known tradeoffs.",
+    "domain": "chemistry",
+    "subdomain": "spectroscopy",
+    "required_keywords": [
+      "spectroscopy",
+      "excited state",
+      "charge transfer"
+    ],
+    "optional_keywords": [
+      "femtosecond",
+      "kinetics",
+      "relaxation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q035",
+    "question": "What are major failure modes and mitigation strategies for ultrafast spectroscopy for charge transfer in molecular and materials chemistry?",
+    "domain": "chemistry",
+    "subdomain": "spectroscopy",
+    "required_keywords": [
+      "spectroscopy",
+      "excited state",
+      "charge transfer"
+    ],
+    "optional_keywords": [
+      "femtosecond",
+      "kinetics",
+      "relaxation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q036",
+    "question": "Summarize benchmarked progress on ultrafast spectroscopy for charge transfer in molecular and materials chemistry and identify open problems.",
+    "domain": "chemistry",
+    "subdomain": "spectroscopy",
+    "required_keywords": [
+      "spectroscopy",
+      "excited state",
+      "charge transfer"
+    ],
+    "optional_keywords": [
+      "femtosecond",
+      "kinetics",
+      "relaxation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q037",
+    "question": "Explain the current evidence and mechanisms for self-assembly of supramolecular systems in molecular and materials chemistry.",
+    "domain": "chemistry",
+    "subdomain": "supramolecular",
+    "required_keywords": [
+      "self-assembly",
+      "noncovalent",
+      "morphology"
+    ],
+    "optional_keywords": [
+      "host-guest",
+      "thermodynamics",
+      "kinetics"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q038",
+    "question": "Compare leading methods for self-assembly of supramolecular systems in molecular and materials chemistry, including known tradeoffs.",
+    "domain": "chemistry",
+    "subdomain": "supramolecular",
+    "required_keywords": [
+      "self-assembly",
+      "noncovalent",
+      "morphology"
+    ],
+    "optional_keywords": [
+      "host-guest",
+      "thermodynamics",
+      "kinetics"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q039",
+    "question": "What are major failure modes and mitigation strategies for self-assembly of supramolecular systems in molecular and materials chemistry?",
+    "domain": "chemistry",
+    "subdomain": "supramolecular",
+    "required_keywords": [
+      "self-assembly",
+      "noncovalent",
+      "morphology"
+    ],
+    "optional_keywords": [
+      "host-guest",
+      "thermodynamics",
+      "kinetics"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q040",
+    "question": "Summarize benchmarked progress on self-assembly of supramolecular systems in molecular and materials chemistry and identify open problems.",
+    "domain": "chemistry",
+    "subdomain": "supramolecular",
+    "required_keywords": [
+      "self-assembly",
+      "noncovalent",
+      "morphology"
+    ],
+    "optional_keywords": [
+      "host-guest",
+      "thermodynamics",
+      "kinetics"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q041",
+    "question": "Explain the current evidence and mechanisms for single-cell RNA-seq integration in quantitative and systems biology.",
+    "domain": "biology",
+    "subdomain": "genomics",
+    "required_keywords": [
+      "single-cell",
+      "batch effect",
+      "cell type"
+    ],
+    "optional_keywords": [
+      "UMAP",
+      "normalization",
+      "integration"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q042",
+    "question": "Compare leading methods for single-cell RNA-seq integration in quantitative and systems biology, including known tradeoffs.",
+    "domain": "biology",
+    "subdomain": "genomics",
+    "required_keywords": [
+      "single-cell",
+      "batch effect",
+      "cell type"
+    ],
+    "optional_keywords": [
+      "UMAP",
+      "normalization",
+      "integration"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q043",
+    "question": "What are major failure modes and mitigation strategies for single-cell RNA-seq integration in quantitative and systems biology?",
+    "domain": "biology",
+    "subdomain": "genomics",
+    "required_keywords": [
+      "single-cell",
+      "batch effect",
+      "cell type"
+    ],
+    "optional_keywords": [
+      "UMAP",
+      "normalization",
+      "integration"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q044",
+    "question": "Summarize benchmarked progress on single-cell RNA-seq integration in quantitative and systems biology and identify open problems.",
+    "domain": "biology",
+    "subdomain": "genomics",
+    "required_keywords": [
+      "single-cell",
+      "batch effect",
+      "cell type"
+    ],
+    "optional_keywords": [
+      "UMAP",
+      "normalization",
+      "integration"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q045",
+    "question": "Explain the current evidence and mechanisms for protein structure prediction reliability in quantitative and systems biology.",
+    "domain": "biology",
+    "subdomain": "protein_science",
+    "required_keywords": [
+      "protein",
+      "structure",
+      "confidence"
+    ],
+    "optional_keywords": [
+      "MSA",
+      "folding",
+      "validation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q046",
+    "question": "Compare leading methods for protein structure prediction reliability in quantitative and systems biology, including known tradeoffs.",
+    "domain": "biology",
+    "subdomain": "protein_science",
+    "required_keywords": [
+      "protein",
+      "structure",
+      "confidence"
+    ],
+    "optional_keywords": [
+      "MSA",
+      "folding",
+      "validation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q047",
+    "question": "What are major failure modes and mitigation strategies for protein structure prediction reliability in quantitative and systems biology?",
+    "domain": "biology",
+    "subdomain": "protein_science",
+    "required_keywords": [
+      "protein",
+      "structure",
+      "confidence"
+    ],
+    "optional_keywords": [
+      "MSA",
+      "folding",
+      "validation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q048",
+    "question": "Summarize benchmarked progress on protein structure prediction reliability in quantitative and systems biology and identify open problems.",
+    "domain": "biology",
+    "subdomain": "protein_science",
+    "required_keywords": [
+      "protein",
+      "structure",
+      "confidence"
+    ],
+    "optional_keywords": [
+      "MSA",
+      "folding",
+      "validation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q049",
+    "question": "Explain the current evidence and mechanisms for gene regulatory network inference in quantitative and systems biology.",
+    "domain": "biology",
+    "subdomain": "systems_biology",
+    "required_keywords": [
+      "regulatory",
+      "network",
+      "perturbation"
+    ],
+    "optional_keywords": [
+      "causal",
+      "transcription",
+      "dynamics"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q050",
+    "question": "Compare leading methods for gene regulatory network inference in quantitative and systems biology, including known tradeoffs.",
+    "domain": "biology",
+    "subdomain": "systems_biology",
+    "required_keywords": [
+      "regulatory",
+      "network",
+      "perturbation"
+    ],
+    "optional_keywords": [
+      "causal",
+      "transcription",
+      "dynamics"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q051",
+    "question": "What are major failure modes and mitigation strategies for gene regulatory network inference in quantitative and systems biology?",
+    "domain": "biology",
+    "subdomain": "systems_biology",
+    "required_keywords": [
+      "regulatory",
+      "network",
+      "perturbation"
+    ],
+    "optional_keywords": [
+      "causal",
+      "transcription",
+      "dynamics"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q052",
+    "question": "Summarize benchmarked progress on gene regulatory network inference in quantitative and systems biology and identify open problems.",
+    "domain": "biology",
+    "subdomain": "systems_biology",
+    "required_keywords": [
+      "regulatory",
+      "network",
+      "perturbation"
+    ],
+    "optional_keywords": [
+      "causal",
+      "transcription",
+      "dynamics"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q053",
+    "question": "Explain the current evidence and mechanisms for large-scale neural decoding in quantitative and systems biology.",
+    "domain": "biology",
+    "subdomain": "neuroscience",
+    "required_keywords": [
+      "neural",
+      "decoding",
+      "representation"
+    ],
+    "optional_keywords": [
+      "spiking",
+      "latent",
+      "generalization"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q054",
+    "question": "Compare leading methods for large-scale neural decoding in quantitative and systems biology, including known tradeoffs.",
+    "domain": "biology",
+    "subdomain": "neuroscience",
+    "required_keywords": [
+      "neural",
+      "decoding",
+      "representation"
+    ],
+    "optional_keywords": [
+      "spiking",
+      "latent",
+      "generalization"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q055",
+    "question": "What are major failure modes and mitigation strategies for large-scale neural decoding in quantitative and systems biology?",
+    "domain": "biology",
+    "subdomain": "neuroscience",
+    "required_keywords": [
+      "neural",
+      "decoding",
+      "representation"
+    ],
+    "optional_keywords": [
+      "spiking",
+      "latent",
+      "generalization"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q056",
+    "question": "Summarize benchmarked progress on large-scale neural decoding in quantitative and systems biology and identify open problems.",
+    "domain": "biology",
+    "subdomain": "neuroscience",
+    "required_keywords": [
+      "neural",
+      "decoding",
+      "representation"
+    ],
+    "optional_keywords": [
+      "spiking",
+      "latent",
+      "generalization"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q057",
+    "question": "Explain the current evidence and mechanisms for CRISPR circuit design in quantitative and systems biology.",
+    "domain": "biology",
+    "subdomain": "synthetic_biology",
+    "required_keywords": [
+      "CRISPR",
+      "circuit",
+      "off-target"
+    ],
+    "optional_keywords": [
+      "guide RNA",
+      "specificity",
+      "safety"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q058",
+    "question": "Compare leading methods for CRISPR circuit design in quantitative and systems biology, including known tradeoffs.",
+    "domain": "biology",
+    "subdomain": "synthetic_biology",
+    "required_keywords": [
+      "CRISPR",
+      "circuit",
+      "off-target"
+    ],
+    "optional_keywords": [
+      "guide RNA",
+      "specificity",
+      "safety"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q059",
+    "question": "What are major failure modes and mitigation strategies for CRISPR circuit design in quantitative and systems biology?",
+    "domain": "biology",
+    "subdomain": "synthetic_biology",
+    "required_keywords": [
+      "CRISPR",
+      "circuit",
+      "off-target"
+    ],
+    "optional_keywords": [
+      "guide RNA",
+      "specificity",
+      "safety"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q060",
+    "question": "Summarize benchmarked progress on CRISPR circuit design in quantitative and systems biology and identify open problems.",
+    "domain": "biology",
+    "subdomain": "synthetic_biology",
+    "required_keywords": [
+      "CRISPR",
+      "circuit",
+      "off-target"
+    ],
+    "optional_keywords": [
+      "guide RNA",
+      "specificity",
+      "safety"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q061",
+    "question": "Explain the current evidence and mechanisms for biomarker-guided cancer therapy selection in clinical and translational research.",
+    "domain": "medicine",
+    "subdomain": "oncology",
+    "required_keywords": [
+      "biomarker",
+      "response",
+      "stratification"
+    ],
+    "optional_keywords": [
+      "precision oncology",
+      "trial",
+      "survival"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q062",
+    "question": "Compare leading methods for biomarker-guided cancer therapy selection in clinical and translational research, including known tradeoffs.",
+    "domain": "medicine",
+    "subdomain": "oncology",
+    "required_keywords": [
+      "biomarker",
+      "response",
+      "stratification"
+    ],
+    "optional_keywords": [
+      "precision oncology",
+      "trial",
+      "survival"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q063",
+    "question": "What are major failure modes and mitigation strategies for biomarker-guided cancer therapy selection in clinical and translational research?",
+    "domain": "medicine",
+    "subdomain": "oncology",
+    "required_keywords": [
+      "biomarker",
+      "response",
+      "stratification"
+    ],
+    "optional_keywords": [
+      "precision oncology",
+      "trial",
+      "survival"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q064",
+    "question": "Summarize benchmarked progress on biomarker-guided cancer therapy selection in clinical and translational research and identify open problems.",
+    "domain": "medicine",
+    "subdomain": "oncology",
+    "required_keywords": [
+      "biomarker",
+      "response",
+      "stratification"
+    ],
+    "optional_keywords": [
+      "precision oncology",
+      "trial",
+      "survival"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q065",
+    "question": "Explain the current evidence and mechanisms for AI triage in radiology workflows in clinical and translational research.",
+    "domain": "medicine",
+    "subdomain": "imaging",
+    "required_keywords": [
+      "radiology",
+      "sensitivity",
+      "specificity"
+    ],
+    "optional_keywords": [
+      "AUC",
+      "workflow",
+      "false positives"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q066",
+    "question": "Compare leading methods for AI triage in radiology workflows in clinical and translational research, including known tradeoffs.",
+    "domain": "medicine",
+    "subdomain": "imaging",
+    "required_keywords": [
+      "radiology",
+      "sensitivity",
+      "specificity"
+    ],
+    "optional_keywords": [
+      "AUC",
+      "workflow",
+      "false positives"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q067",
+    "question": "What are major failure modes and mitigation strategies for AI triage in radiology workflows in clinical and translational research?",
+    "domain": "medicine",
+    "subdomain": "imaging",
+    "required_keywords": [
+      "radiology",
+      "sensitivity",
+      "specificity"
+    ],
+    "optional_keywords": [
+      "AUC",
+      "workflow",
+      "false positives"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q068",
+    "question": "Summarize benchmarked progress on AI triage in radiology workflows in clinical and translational research and identify open problems.",
+    "domain": "medicine",
+    "subdomain": "imaging",
+    "required_keywords": [
+      "radiology",
+      "sensitivity",
+      "specificity"
+    ],
+    "optional_keywords": [
+      "AUC",
+      "workflow",
+      "false positives"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q069",
+    "question": "Explain the current evidence and mechanisms for causal inference in observational cohorts in clinical and translational research.",
+    "domain": "medicine",
+    "subdomain": "epidemiology",
+    "required_keywords": [
+      "confounding",
+      "causal",
+      "cohort"
+    ],
+    "optional_keywords": [
+      "propensity",
+      "bias",
+      "sensitivity analysis"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q070",
+    "question": "Compare leading methods for causal inference in observational cohorts in clinical and translational research, including known tradeoffs.",
+    "domain": "medicine",
+    "subdomain": "epidemiology",
+    "required_keywords": [
+      "confounding",
+      "causal",
+      "cohort"
+    ],
+    "optional_keywords": [
+      "propensity",
+      "bias",
+      "sensitivity analysis"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q071",
+    "question": "What are major failure modes and mitigation strategies for causal inference in observational cohorts in clinical and translational research?",
+    "domain": "medicine",
+    "subdomain": "epidemiology",
+    "required_keywords": [
+      "confounding",
+      "causal",
+      "cohort"
+    ],
+    "optional_keywords": [
+      "propensity",
+      "bias",
+      "sensitivity analysis"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q072",
+    "question": "Summarize benchmarked progress on causal inference in observational cohorts in clinical and translational research and identify open problems.",
+    "domain": "medicine",
+    "subdomain": "epidemiology",
+    "required_keywords": [
+      "confounding",
+      "causal",
+      "cohort"
+    ],
+    "optional_keywords": [
+      "propensity",
+      "bias",
+      "sensitivity analysis"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q073",
+    "question": "Explain the current evidence and mechanisms for risk prediction for heart failure in clinical and translational research.",
+    "domain": "medicine",
+    "subdomain": "cardiology",
+    "required_keywords": [
+      "risk model",
+      "heart failure",
+      "calibration"
+    ],
+    "optional_keywords": [
+      "EHR",
+      "time-to-event",
+      "external validation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q074",
+    "question": "Compare leading methods for risk prediction for heart failure in clinical and translational research, including known tradeoffs.",
+    "domain": "medicine",
+    "subdomain": "cardiology",
+    "required_keywords": [
+      "risk model",
+      "heart failure",
+      "calibration"
+    ],
+    "optional_keywords": [
+      "EHR",
+      "time-to-event",
+      "external validation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q075",
+    "question": "What are major failure modes and mitigation strategies for risk prediction for heart failure in clinical and translational research?",
+    "domain": "medicine",
+    "subdomain": "cardiology",
+    "required_keywords": [
+      "risk model",
+      "heart failure",
+      "calibration"
+    ],
+    "optional_keywords": [
+      "EHR",
+      "time-to-event",
+      "external validation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q076",
+    "question": "Summarize benchmarked progress on risk prediction for heart failure in clinical and translational research and identify open problems.",
+    "domain": "medicine",
+    "subdomain": "cardiology",
+    "required_keywords": [
+      "risk model",
+      "heart failure",
+      "calibration"
+    ],
+    "optional_keywords": [
+      "EHR",
+      "time-to-event",
+      "external validation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q077",
+    "question": "Explain the current evidence and mechanisms for antimicrobial resistance surveillance in clinical and translational research.",
+    "domain": "medicine",
+    "subdomain": "infectious_disease",
+    "required_keywords": [
+      "resistance",
+      "pathogen",
+      "surveillance"
+    ],
+    "optional_keywords": [
+      "genomics",
+      "stewardship",
+      "trend"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q078",
+    "question": "Compare leading methods for antimicrobial resistance surveillance in clinical and translational research, including known tradeoffs.",
+    "domain": "medicine",
+    "subdomain": "infectious_disease",
+    "required_keywords": [
+      "resistance",
+      "pathogen",
+      "surveillance"
+    ],
+    "optional_keywords": [
+      "genomics",
+      "stewardship",
+      "trend"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q079",
+    "question": "What are major failure modes and mitigation strategies for antimicrobial resistance surveillance in clinical and translational research?",
+    "domain": "medicine",
+    "subdomain": "infectious_disease",
+    "required_keywords": [
+      "resistance",
+      "pathogen",
+      "surveillance"
+    ],
+    "optional_keywords": [
+      "genomics",
+      "stewardship",
+      "trend"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q080",
+    "question": "Summarize benchmarked progress on antimicrobial resistance surveillance in clinical and translational research and identify open problems.",
+    "domain": "medicine",
+    "subdomain": "infectious_disease",
+    "required_keywords": [
+      "resistance",
+      "pathogen",
+      "surveillance"
+    ],
+    "optional_keywords": [
+      "genomics",
+      "stewardship",
+      "trend"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q081",
+    "question": "Explain the current evidence and mechanisms for retrieval-augmented generation fidelity in modern machine learning and systems.",
+    "domain": "computer_science",
+    "subdomain": "nlp",
+    "required_keywords": [
+      "retrieval",
+      "grounding",
+      "hallucination"
+    ],
+    "optional_keywords": [
+      "RAG",
+      "citation",
+      "faithfulness"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q082",
+    "question": "Compare leading methods for retrieval-augmented generation fidelity in modern machine learning and systems, including known tradeoffs.",
+    "domain": "computer_science",
+    "subdomain": "nlp",
+    "required_keywords": [
+      "retrieval",
+      "grounding",
+      "hallucination"
+    ],
+    "optional_keywords": [
+      "RAG",
+      "citation",
+      "faithfulness"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q083",
+    "question": "What are major failure modes and mitigation strategies for retrieval-augmented generation fidelity in modern machine learning and systems?",
+    "domain": "computer_science",
+    "subdomain": "nlp",
+    "required_keywords": [
+      "retrieval",
+      "grounding",
+      "hallucination"
+    ],
+    "optional_keywords": [
+      "RAG",
+      "citation",
+      "faithfulness"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q084",
+    "question": "Summarize benchmarked progress on retrieval-augmented generation fidelity in modern machine learning and systems and identify open problems.",
+    "domain": "computer_science",
+    "subdomain": "nlp",
+    "required_keywords": [
+      "retrieval",
+      "grounding",
+      "hallucination"
+    ],
+    "optional_keywords": [
+      "RAG",
+      "citation",
+      "faithfulness"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q085",
+    "question": "Explain the current evidence and mechanisms for vision transformer robustness in modern machine learning and systems.",
+    "domain": "computer_science",
+    "subdomain": "vision",
+    "required_keywords": [
+      "transformer",
+      "robustness",
+      "distribution shift"
+    ],
+    "optional_keywords": [
+      "augmentation",
+      "adversarial",
+      "OOD"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q086",
+    "question": "Compare leading methods for vision transformer robustness in modern machine learning and systems, including known tradeoffs.",
+    "domain": "computer_science",
+    "subdomain": "vision",
+    "required_keywords": [
+      "transformer",
+      "robustness",
+      "distribution shift"
+    ],
+    "optional_keywords": [
+      "augmentation",
+      "adversarial",
+      "OOD"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q087",
+    "question": "What are major failure modes and mitigation strategies for vision transformer robustness in modern machine learning and systems?",
+    "domain": "computer_science",
+    "subdomain": "vision",
+    "required_keywords": [
+      "transformer",
+      "robustness",
+      "distribution shift"
+    ],
+    "optional_keywords": [
+      "augmentation",
+      "adversarial",
+      "OOD"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q088",
+    "question": "Summarize benchmarked progress on vision transformer robustness in modern machine learning and systems and identify open problems.",
+    "domain": "computer_science",
+    "subdomain": "vision",
+    "required_keywords": [
+      "transformer",
+      "robustness",
+      "distribution shift"
+    ],
+    "optional_keywords": [
+      "augmentation",
+      "adversarial",
+      "OOD"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q089",
+    "question": "Explain the current evidence and mechanisms for LLM inference optimization in modern machine learning and systems.",
+    "domain": "computer_science",
+    "subdomain": "systems",
+    "required_keywords": [
+      "latency",
+      "throughput",
+      "quantization"
+    ],
+    "optional_keywords": [
+      "KV cache",
+      "batching",
+      "memory"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q090",
+    "question": "Compare leading methods for LLM inference optimization in modern machine learning and systems, including known tradeoffs.",
+    "domain": "computer_science",
+    "subdomain": "systems",
+    "required_keywords": [
+      "latency",
+      "throughput",
+      "quantization"
+    ],
+    "optional_keywords": [
+      "KV cache",
+      "batching",
+      "memory"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q091",
+    "question": "What are major failure modes and mitigation strategies for LLM inference optimization in modern machine learning and systems?",
+    "domain": "computer_science",
+    "subdomain": "systems",
+    "required_keywords": [
+      "latency",
+      "throughput",
+      "quantization"
+    ],
+    "optional_keywords": [
+      "KV cache",
+      "batching",
+      "memory"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q092",
+    "question": "Summarize benchmarked progress on LLM inference optimization in modern machine learning and systems and identify open problems.",
+    "domain": "computer_science",
+    "subdomain": "systems",
+    "required_keywords": [
+      "latency",
+      "throughput",
+      "quantization"
+    ],
+    "optional_keywords": [
+      "KV cache",
+      "batching",
+      "memory"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q093",
+    "question": "Explain the current evidence and mechanisms for ML model extraction defenses in modern machine learning and systems.",
+    "domain": "computer_science",
+    "subdomain": "security",
+    "required_keywords": [
+      "model extraction",
+      "query",
+      "defense"
+    ],
+    "optional_keywords": [
+      "watermark",
+      "rate limit",
+      "privacy"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q094",
+    "question": "Compare leading methods for ML model extraction defenses in modern machine learning and systems, including known tradeoffs.",
+    "domain": "computer_science",
+    "subdomain": "security",
+    "required_keywords": [
+      "model extraction",
+      "query",
+      "defense"
+    ],
+    "optional_keywords": [
+      "watermark",
+      "rate limit",
+      "privacy"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q095",
+    "question": "What are major failure modes and mitigation strategies for ML model extraction defenses in modern machine learning and systems?",
+    "domain": "computer_science",
+    "subdomain": "security",
+    "required_keywords": [
+      "model extraction",
+      "query",
+      "defense"
+    ],
+    "optional_keywords": [
+      "watermark",
+      "rate limit",
+      "privacy"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q096",
+    "question": "Summarize benchmarked progress on ML model extraction defenses in modern machine learning and systems and identify open problems.",
+    "domain": "computer_science",
+    "subdomain": "security",
+    "required_keywords": [
+      "model extraction",
+      "query",
+      "defense"
+    ],
+    "optional_keywords": [
+      "watermark",
+      "rate limit",
+      "privacy"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q097",
+    "question": "Explain the current evidence and mechanisms for generalization bounds for deep learning in modern machine learning and systems.",
+    "domain": "computer_science",
+    "subdomain": "theory",
+    "required_keywords": [
+      "generalization",
+      "capacity",
+      "regularization"
+    ],
+    "optional_keywords": [
+      "PAC-Bayes",
+      "margin",
+      "implicit bias"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q098",
+    "question": "Compare leading methods for generalization bounds for deep learning in modern machine learning and systems, including known tradeoffs.",
+    "domain": "computer_science",
+    "subdomain": "theory",
+    "required_keywords": [
+      "generalization",
+      "capacity",
+      "regularization"
+    ],
+    "optional_keywords": [
+      "PAC-Bayes",
+      "margin",
+      "implicit bias"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q099",
+    "question": "What are major failure modes and mitigation strategies for generalization bounds for deep learning in modern machine learning and systems?",
+    "domain": "computer_science",
+    "subdomain": "theory",
+    "required_keywords": [
+      "generalization",
+      "capacity",
+      "regularization"
+    ],
+    "optional_keywords": [
+      "PAC-Bayes",
+      "margin",
+      "implicit bias"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q100",
+    "question": "Summarize benchmarked progress on generalization bounds for deep learning in modern machine learning and systems and identify open problems.",
+    "domain": "computer_science",
+    "subdomain": "theory",
+    "required_keywords": [
+      "generalization",
+      "capacity",
+      "regularization"
+    ],
+    "optional_keywords": [
+      "PAC-Bayes",
+      "margin",
+      "implicit bias"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q101",
+    "question": "Explain the current evidence and mechanisms for solid-state battery interfaces in materials discovery and characterization.",
+    "domain": "materials_science",
+    "subdomain": "battery_materials",
+    "required_keywords": [
+      "interface",
+      "interphase",
+      "ionic transport"
+    ],
+    "optional_keywords": [
+      "dendrite",
+      "stability",
+      "electrolyte"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q102",
+    "question": "Compare leading methods for solid-state battery interfaces in materials discovery and characterization, including known tradeoffs.",
+    "domain": "materials_science",
+    "subdomain": "battery_materials",
+    "required_keywords": [
+      "interface",
+      "interphase",
+      "ionic transport"
+    ],
+    "optional_keywords": [
+      "dendrite",
+      "stability",
+      "electrolyte"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q103",
+    "question": "What are major failure modes and mitigation strategies for solid-state battery interfaces in materials discovery and characterization?",
+    "domain": "materials_science",
+    "subdomain": "battery_materials",
+    "required_keywords": [
+      "interface",
+      "interphase",
+      "ionic transport"
+    ],
+    "optional_keywords": [
+      "dendrite",
+      "stability",
+      "electrolyte"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q104",
+    "question": "Summarize benchmarked progress on solid-state battery interfaces in materials discovery and characterization and identify open problems.",
+    "domain": "materials_science",
+    "subdomain": "battery_materials",
+    "required_keywords": [
+      "interface",
+      "interphase",
+      "ionic transport"
+    ],
+    "optional_keywords": [
+      "dendrite",
+      "stability",
+      "electrolyte"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q105",
+    "question": "Explain the current evidence and mechanisms for high-entropy alloy design in materials discovery and characterization.",
+    "domain": "materials_science",
+    "subdomain": "alloys",
+    "required_keywords": [
+      "alloy",
+      "phase stability",
+      "mechanical"
+    ],
+    "optional_keywords": [
+      "entropy",
+      "microstructure",
+      "strength"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q106",
+    "question": "Compare leading methods for high-entropy alloy design in materials discovery and characterization, including known tradeoffs.",
+    "domain": "materials_science",
+    "subdomain": "alloys",
+    "required_keywords": [
+      "alloy",
+      "phase stability",
+      "mechanical"
+    ],
+    "optional_keywords": [
+      "entropy",
+      "microstructure",
+      "strength"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q107",
+    "question": "What are major failure modes and mitigation strategies for high-entropy alloy design in materials discovery and characterization?",
+    "domain": "materials_science",
+    "subdomain": "alloys",
+    "required_keywords": [
+      "alloy",
+      "phase stability",
+      "mechanical"
+    ],
+    "optional_keywords": [
+      "entropy",
+      "microstructure",
+      "strength"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q108",
+    "question": "Summarize benchmarked progress on high-entropy alloy design in materials discovery and characterization and identify open problems.",
+    "domain": "materials_science",
+    "subdomain": "alloys",
+    "required_keywords": [
+      "alloy",
+      "phase stability",
+      "mechanical"
+    ],
+    "optional_keywords": [
+      "entropy",
+      "microstructure",
+      "strength"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q109",
+    "question": "Explain the current evidence and mechanisms for defect engineering in wide-bandgap semiconductors in materials discovery and characterization.",
+    "domain": "materials_science",
+    "subdomain": "semiconductors",
+    "required_keywords": [
+      "defect",
+      "bandgap",
+      "dopant"
+    ],
+    "optional_keywords": [
+      "trap",
+      "mobility",
+      "recombination"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q110",
+    "question": "Compare leading methods for defect engineering in wide-bandgap semiconductors in materials discovery and characterization, including known tradeoffs.",
+    "domain": "materials_science",
+    "subdomain": "semiconductors",
+    "required_keywords": [
+      "defect",
+      "bandgap",
+      "dopant"
+    ],
+    "optional_keywords": [
+      "trap",
+      "mobility",
+      "recombination"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q111",
+    "question": "What are major failure modes and mitigation strategies for defect engineering in wide-bandgap semiconductors in materials discovery and characterization?",
+    "domain": "materials_science",
+    "subdomain": "semiconductors",
+    "required_keywords": [
+      "defect",
+      "bandgap",
+      "dopant"
+    ],
+    "optional_keywords": [
+      "trap",
+      "mobility",
+      "recombination"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q112",
+    "question": "Summarize benchmarked progress on defect engineering in wide-bandgap semiconductors in materials discovery and characterization and identify open problems.",
+    "domain": "materials_science",
+    "subdomain": "semiconductors",
+    "required_keywords": [
+      "defect",
+      "bandgap",
+      "dopant"
+    ],
+    "optional_keywords": [
+      "trap",
+      "mobility",
+      "recombination"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q113",
+    "question": "Explain the current evidence and mechanisms for operando catalyst characterization in materials discovery and characterization.",
+    "domain": "materials_science",
+    "subdomain": "catalytic_materials",
+    "required_keywords": [
+      "operando",
+      "catalyst",
+      "active phase"
+    ],
+    "optional_keywords": [
+      "spectroscopy",
+      "structure",
+      "turnover"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q114",
+    "question": "Compare leading methods for operando catalyst characterization in materials discovery and characterization, including known tradeoffs.",
+    "domain": "materials_science",
+    "subdomain": "catalytic_materials",
+    "required_keywords": [
+      "operando",
+      "catalyst",
+      "active phase"
+    ],
+    "optional_keywords": [
+      "spectroscopy",
+      "structure",
+      "turnover"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q115",
+    "question": "What are major failure modes and mitigation strategies for operando catalyst characterization in materials discovery and characterization?",
+    "domain": "materials_science",
+    "subdomain": "catalytic_materials",
+    "required_keywords": [
+      "operando",
+      "catalyst",
+      "active phase"
+    ],
+    "optional_keywords": [
+      "spectroscopy",
+      "structure",
+      "turnover"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q116",
+    "question": "Summarize benchmarked progress on operando catalyst characterization in materials discovery and characterization and identify open problems.",
+    "domain": "materials_science",
+    "subdomain": "catalytic_materials",
+    "required_keywords": [
+      "operando",
+      "catalyst",
+      "active phase"
+    ],
+    "optional_keywords": [
+      "spectroscopy",
+      "structure",
+      "turnover"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q117",
+    "question": "Explain the current evidence and mechanisms for foundation models for materials screening in materials discovery and characterization.",
+    "domain": "materials_science",
+    "subdomain": "ml_materials",
+    "required_keywords": [
+      "foundation model",
+      "materials",
+      "screening"
+    ],
+    "optional_keywords": [
+      "representation",
+      "transfer",
+      "benchmark"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q118",
+    "question": "Compare leading methods for foundation models for materials screening in materials discovery and characterization, including known tradeoffs.",
+    "domain": "materials_science",
+    "subdomain": "ml_materials",
+    "required_keywords": [
+      "foundation model",
+      "materials",
+      "screening"
+    ],
+    "optional_keywords": [
+      "representation",
+      "transfer",
+      "benchmark"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q119",
+    "question": "What are major failure modes and mitigation strategies for foundation models for materials screening in materials discovery and characterization?",
+    "domain": "materials_science",
+    "subdomain": "ml_materials",
+    "required_keywords": [
+      "foundation model",
+      "materials",
+      "screening"
+    ],
+    "optional_keywords": [
+      "representation",
+      "transfer",
+      "benchmark"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q120",
+    "question": "Summarize benchmarked progress on foundation models for materials screening in materials discovery and characterization and identify open problems.",
+    "domain": "materials_science",
+    "subdomain": "ml_materials",
+    "required_keywords": [
+      "foundation model",
+      "materials",
+      "screening"
+    ],
+    "optional_keywords": [
+      "representation",
+      "transfer",
+      "benchmark"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q121",
+    "question": "Explain the current evidence and mechanisms for grid stability with inverter-dominated systems in electronic and energy systems.",
+    "domain": "electrical_engineering",
+    "subdomain": "power_systems",
+    "required_keywords": [
+      "inverter",
+      "stability",
+      "grid"
+    ],
+    "optional_keywords": [
+      "frequency",
+      "control",
+      "resilience"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q122",
+    "question": "Compare leading methods for grid stability with inverter-dominated systems in electronic and energy systems, including known tradeoffs.",
+    "domain": "electrical_engineering",
+    "subdomain": "power_systems",
+    "required_keywords": [
+      "inverter",
+      "stability",
+      "grid"
+    ],
+    "optional_keywords": [
+      "frequency",
+      "control",
+      "resilience"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q123",
+    "question": "What are major failure modes and mitigation strategies for grid stability with inverter-dominated systems in electronic and energy systems?",
+    "domain": "electrical_engineering",
+    "subdomain": "power_systems",
+    "required_keywords": [
+      "inverter",
+      "stability",
+      "grid"
+    ],
+    "optional_keywords": [
+      "frequency",
+      "control",
+      "resilience"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q124",
+    "question": "Summarize benchmarked progress on grid stability with inverter-dominated systems in electronic and energy systems and identify open problems.",
+    "domain": "electrical_engineering",
+    "subdomain": "power_systems",
+    "required_keywords": [
+      "inverter",
+      "stability",
+      "grid"
+    ],
+    "optional_keywords": [
+      "frequency",
+      "control",
+      "resilience"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q125",
+    "question": "Explain the current evidence and mechanisms for massive MIMO channel estimation in electronic and energy systems.",
+    "domain": "electrical_engineering",
+    "subdomain": "communications",
+    "required_keywords": [
+      "MIMO",
+      "channel estimation",
+      "spectral efficiency"
+    ],
+    "optional_keywords": [
+      "beamforming",
+      "pilot",
+      "noise"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q126",
+    "question": "Compare leading methods for massive MIMO channel estimation in electronic and energy systems, including known tradeoffs.",
+    "domain": "electrical_engineering",
+    "subdomain": "communications",
+    "required_keywords": [
+      "MIMO",
+      "channel estimation",
+      "spectral efficiency"
+    ],
+    "optional_keywords": [
+      "beamforming",
+      "pilot",
+      "noise"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q127",
+    "question": "What are major failure modes and mitigation strategies for massive MIMO channel estimation in electronic and energy systems?",
+    "domain": "electrical_engineering",
+    "subdomain": "communications",
+    "required_keywords": [
+      "MIMO",
+      "channel estimation",
+      "spectral efficiency"
+    ],
+    "optional_keywords": [
+      "beamforming",
+      "pilot",
+      "noise"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q128",
+    "question": "Summarize benchmarked progress on massive MIMO channel estimation in electronic and energy systems and identify open problems.",
+    "domain": "electrical_engineering",
+    "subdomain": "communications",
+    "required_keywords": [
+      "MIMO",
+      "channel estimation",
+      "spectral efficiency"
+    ],
+    "optional_keywords": [
+      "beamforming",
+      "pilot",
+      "noise"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q129",
+    "question": "Explain the current evidence and mechanisms for compressed sensing in imaging in electronic and energy systems.",
+    "domain": "electrical_engineering",
+    "subdomain": "signal_processing",
+    "required_keywords": [
+      "compressed sensing",
+      "reconstruction",
+      "sparsity"
+    ],
+    "optional_keywords": [
+      "regularization",
+      "sampling",
+      "noise"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q130",
+    "question": "Compare leading methods for compressed sensing in imaging in electronic and energy systems, including known tradeoffs.",
+    "domain": "electrical_engineering",
+    "subdomain": "signal_processing",
+    "required_keywords": [
+      "compressed sensing",
+      "reconstruction",
+      "sparsity"
+    ],
+    "optional_keywords": [
+      "regularization",
+      "sampling",
+      "noise"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q131",
+    "question": "What are major failure modes and mitigation strategies for compressed sensing in imaging in electronic and energy systems?",
+    "domain": "electrical_engineering",
+    "subdomain": "signal_processing",
+    "required_keywords": [
+      "compressed sensing",
+      "reconstruction",
+      "sparsity"
+    ],
+    "optional_keywords": [
+      "regularization",
+      "sampling",
+      "noise"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q132",
+    "question": "Summarize benchmarked progress on compressed sensing in imaging in electronic and energy systems and identify open problems.",
+    "domain": "electrical_engineering",
+    "subdomain": "signal_processing",
+    "required_keywords": [
+      "compressed sensing",
+      "reconstruction",
+      "sparsity"
+    ],
+    "optional_keywords": [
+      "regularization",
+      "sampling",
+      "noise"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q133",
+    "question": "Explain the current evidence and mechanisms for edge AI deployment under power constraints in electronic and energy systems.",
+    "domain": "electrical_engineering",
+    "subdomain": "embedded",
+    "required_keywords": [
+      "edge",
+      "power",
+      "latency"
+    ],
+    "optional_keywords": [
+      "quantization",
+      "compiler",
+      "throughput"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q134",
+    "question": "Compare leading methods for edge AI deployment under power constraints in electronic and energy systems, including known tradeoffs.",
+    "domain": "electrical_engineering",
+    "subdomain": "embedded",
+    "required_keywords": [
+      "edge",
+      "power",
+      "latency"
+    ],
+    "optional_keywords": [
+      "quantization",
+      "compiler",
+      "throughput"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q135",
+    "question": "What are major failure modes and mitigation strategies for edge AI deployment under power constraints in electronic and energy systems?",
+    "domain": "electrical_engineering",
+    "subdomain": "embedded",
+    "required_keywords": [
+      "edge",
+      "power",
+      "latency"
+    ],
+    "optional_keywords": [
+      "quantization",
+      "compiler",
+      "throughput"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q136",
+    "question": "Summarize benchmarked progress on edge AI deployment under power constraints in electronic and energy systems and identify open problems.",
+    "domain": "electrical_engineering",
+    "subdomain": "embedded",
+    "required_keywords": [
+      "edge",
+      "power",
+      "latency"
+    ],
+    "optional_keywords": [
+      "quantization",
+      "compiler",
+      "throughput"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q137",
+    "question": "Explain the current evidence and mechanisms for GaN power device reliability in electronic and energy systems.",
+    "domain": "electrical_engineering",
+    "subdomain": "devices",
+    "required_keywords": [
+      "GaN",
+      "reliability",
+      "breakdown"
+    ],
+    "optional_keywords": [
+      "thermal",
+      "trap",
+      "lifetime"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q138",
+    "question": "Compare leading methods for GaN power device reliability in electronic and energy systems, including known tradeoffs.",
+    "domain": "electrical_engineering",
+    "subdomain": "devices",
+    "required_keywords": [
+      "GaN",
+      "reliability",
+      "breakdown"
+    ],
+    "optional_keywords": [
+      "thermal",
+      "trap",
+      "lifetime"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q139",
+    "question": "What are major failure modes and mitigation strategies for GaN power device reliability in electronic and energy systems?",
+    "domain": "electrical_engineering",
+    "subdomain": "devices",
+    "required_keywords": [
+      "GaN",
+      "reliability",
+      "breakdown"
+    ],
+    "optional_keywords": [
+      "thermal",
+      "trap",
+      "lifetime"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q140",
+    "question": "Summarize benchmarked progress on GaN power device reliability in electronic and energy systems and identify open problems.",
+    "domain": "electrical_engineering",
+    "subdomain": "devices",
+    "required_keywords": [
+      "GaN",
+      "reliability",
+      "breakdown"
+    ],
+    "optional_keywords": [
+      "thermal",
+      "trap",
+      "lifetime"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q141",
+    "question": "Explain the current evidence and mechanisms for nonconvex optimization in deep models in applied and computational mathematics.",
+    "domain": "mathematics",
+    "subdomain": "optimization",
+    "required_keywords": [
+      "nonconvex",
+      "optimization",
+      "convergence"
+    ],
+    "optional_keywords": [
+      "saddle point",
+      "stochastic",
+      "landscape"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q142",
+    "question": "Compare leading methods for nonconvex optimization in deep models in applied and computational mathematics, including known tradeoffs.",
+    "domain": "mathematics",
+    "subdomain": "optimization",
+    "required_keywords": [
+      "nonconvex",
+      "optimization",
+      "convergence"
+    ],
+    "optional_keywords": [
+      "saddle point",
+      "stochastic",
+      "landscape"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q143",
+    "question": "What are major failure modes and mitigation strategies for nonconvex optimization in deep models in applied and computational mathematics?",
+    "domain": "mathematics",
+    "subdomain": "optimization",
+    "required_keywords": [
+      "nonconvex",
+      "optimization",
+      "convergence"
+    ],
+    "optional_keywords": [
+      "saddle point",
+      "stochastic",
+      "landscape"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q144",
+    "question": "Summarize benchmarked progress on nonconvex optimization in deep models in applied and computational mathematics and identify open problems.",
+    "domain": "mathematics",
+    "subdomain": "optimization",
+    "required_keywords": [
+      "nonconvex",
+      "optimization",
+      "convergence"
+    ],
+    "optional_keywords": [
+      "saddle point",
+      "stochastic",
+      "landscape"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q145",
+    "question": "Explain the current evidence and mechanisms for stable solvers for stiff PDEs in applied and computational mathematics.",
+    "domain": "mathematics",
+    "subdomain": "numerical_pde",
+    "required_keywords": [
+      "PDE",
+      "stiff",
+      "stability"
+    ],
+    "optional_keywords": [
+      "time stepping",
+      "error",
+      "adaptivity"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q146",
+    "question": "Compare leading methods for stable solvers for stiff PDEs in applied and computational mathematics, including known tradeoffs.",
+    "domain": "mathematics",
+    "subdomain": "numerical_pde",
+    "required_keywords": [
+      "PDE",
+      "stiff",
+      "stability"
+    ],
+    "optional_keywords": [
+      "time stepping",
+      "error",
+      "adaptivity"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q147",
+    "question": "What are major failure modes and mitigation strategies for stable solvers for stiff PDEs in applied and computational mathematics?",
+    "domain": "mathematics",
+    "subdomain": "numerical_pde",
+    "required_keywords": [
+      "PDE",
+      "stiff",
+      "stability"
+    ],
+    "optional_keywords": [
+      "time stepping",
+      "error",
+      "adaptivity"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q148",
+    "question": "Summarize benchmarked progress on stable solvers for stiff PDEs in applied and computational mathematics and identify open problems.",
+    "domain": "mathematics",
+    "subdomain": "numerical_pde",
+    "required_keywords": [
+      "PDE",
+      "stiff",
+      "stability"
+    ],
+    "optional_keywords": [
+      "time stepping",
+      "error",
+      "adaptivity"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q149",
+    "question": "Explain the current evidence and mechanisms for uncertainty quantification in Bayesian models in applied and computational mathematics.",
+    "domain": "mathematics",
+    "subdomain": "probability",
+    "required_keywords": [
+      "uncertainty",
+      "Bayesian",
+      "posterior"
+    ],
+    "optional_keywords": [
+      "prior",
+      "sampling",
+      "credible interval"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q150",
+    "question": "Compare leading methods for uncertainty quantification in Bayesian models in applied and computational mathematics, including known tradeoffs.",
+    "domain": "mathematics",
+    "subdomain": "probability",
+    "required_keywords": [
+      "uncertainty",
+      "Bayesian",
+      "posterior"
+    ],
+    "optional_keywords": [
+      "prior",
+      "sampling",
+      "credible interval"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q151",
+    "question": "What are major failure modes and mitigation strategies for uncertainty quantification in Bayesian models in applied and computational mathematics?",
+    "domain": "mathematics",
+    "subdomain": "probability",
+    "required_keywords": [
+      "uncertainty",
+      "Bayesian",
+      "posterior"
+    ],
+    "optional_keywords": [
+      "prior",
+      "sampling",
+      "credible interval"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q152",
+    "question": "Summarize benchmarked progress on uncertainty quantification in Bayesian models in applied and computational mathematics and identify open problems.",
+    "domain": "mathematics",
+    "subdomain": "probability",
+    "required_keywords": [
+      "uncertainty",
+      "Bayesian",
+      "posterior"
+    ],
+    "optional_keywords": [
+      "prior",
+      "sampling",
+      "credible interval"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q153",
+    "question": "Explain the current evidence and mechanisms for spectral graph methods for clustering in applied and computational mathematics.",
+    "domain": "mathematics",
+    "subdomain": "graph_theory",
+    "required_keywords": [
+      "graph",
+      "spectral",
+      "clustering"
+    ],
+    "optional_keywords": [
+      "Laplacian",
+      "cut",
+      "eigenvalue"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q154",
+    "question": "Compare leading methods for spectral graph methods for clustering in applied and computational mathematics, including known tradeoffs.",
+    "domain": "mathematics",
+    "subdomain": "graph_theory",
+    "required_keywords": [
+      "graph",
+      "spectral",
+      "clustering"
+    ],
+    "optional_keywords": [
+      "Laplacian",
+      "cut",
+      "eigenvalue"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q155",
+    "question": "What are major failure modes and mitigation strategies for spectral graph methods for clustering in applied and computational mathematics?",
+    "domain": "mathematics",
+    "subdomain": "graph_theory",
+    "required_keywords": [
+      "graph",
+      "spectral",
+      "clustering"
+    ],
+    "optional_keywords": [
+      "Laplacian",
+      "cut",
+      "eigenvalue"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q156",
+    "question": "Summarize benchmarked progress on spectral graph methods for clustering in applied and computational mathematics and identify open problems.",
+    "domain": "mathematics",
+    "subdomain": "graph_theory",
+    "required_keywords": [
+      "graph",
+      "spectral",
+      "clustering"
+    ],
+    "optional_keywords": [
+      "Laplacian",
+      "cut",
+      "eigenvalue"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q157",
+    "question": "Explain the current evidence and mechanisms for coding limits in noisy channels in applied and computational mathematics.",
+    "domain": "mathematics",
+    "subdomain": "information_theory",
+    "required_keywords": [
+      "coding",
+      "capacity",
+      "noise"
+    ],
+    "optional_keywords": [
+      "Shannon",
+      "error rate",
+      "decoder"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q158",
+    "question": "Compare leading methods for coding limits in noisy channels in applied and computational mathematics, including known tradeoffs.",
+    "domain": "mathematics",
+    "subdomain": "information_theory",
+    "required_keywords": [
+      "coding",
+      "capacity",
+      "noise"
+    ],
+    "optional_keywords": [
+      "Shannon",
+      "error rate",
+      "decoder"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q159",
+    "question": "What are major failure modes and mitigation strategies for coding limits in noisy channels in applied and computational mathematics?",
+    "domain": "mathematics",
+    "subdomain": "information_theory",
+    "required_keywords": [
+      "coding",
+      "capacity",
+      "noise"
+    ],
+    "optional_keywords": [
+      "Shannon",
+      "error rate",
+      "decoder"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q160",
+    "question": "Summarize benchmarked progress on coding limits in noisy channels in applied and computational mathematics and identify open problems.",
+    "domain": "mathematics",
+    "subdomain": "information_theory",
+    "required_keywords": [
+      "coding",
+      "capacity",
+      "noise"
+    ],
+    "optional_keywords": [
+      "Shannon",
+      "error rate",
+      "decoder"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q161",
+    "question": "Explain the current evidence and mechanisms for attribution of extreme weather events in climate and geophysical systems.",
+    "domain": "earth_science",
+    "subdomain": "climate",
+    "required_keywords": [
+      "attribution",
+      "extreme event",
+      "climate model"
+    ],
+    "optional_keywords": [
+      "counterfactual",
+      "uncertainty",
+      "ensemble"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q162",
+    "question": "Compare leading methods for attribution of extreme weather events in climate and geophysical systems, including known tradeoffs.",
+    "domain": "earth_science",
+    "subdomain": "climate",
+    "required_keywords": [
+      "attribution",
+      "extreme event",
+      "climate model"
+    ],
+    "optional_keywords": [
+      "counterfactual",
+      "uncertainty",
+      "ensemble"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q163",
+    "question": "What are major failure modes and mitigation strategies for attribution of extreme weather events in climate and geophysical systems?",
+    "domain": "earth_science",
+    "subdomain": "climate",
+    "required_keywords": [
+      "attribution",
+      "extreme event",
+      "climate model"
+    ],
+    "optional_keywords": [
+      "counterfactual",
+      "uncertainty",
+      "ensemble"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q164",
+    "question": "Summarize benchmarked progress on attribution of extreme weather events in climate and geophysical systems and identify open problems.",
+    "domain": "earth_science",
+    "subdomain": "climate",
+    "required_keywords": [
+      "attribution",
+      "extreme event",
+      "climate model"
+    ],
+    "optional_keywords": [
+      "counterfactual",
+      "uncertainty",
+      "ensemble"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q165",
+    "question": "Explain the current evidence and mechanisms for flood forecasting with hybrid models in climate and geophysical systems.",
+    "domain": "earth_science",
+    "subdomain": "hydrology",
+    "required_keywords": [
+      "flood",
+      "forecast",
+      "hydrology"
+    ],
+    "optional_keywords": [
+      "remote sensing",
+      "rainfall",
+      "lead time"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q166",
+    "question": "Compare leading methods for flood forecasting with hybrid models in climate and geophysical systems, including known tradeoffs.",
+    "domain": "earth_science",
+    "subdomain": "hydrology",
+    "required_keywords": [
+      "flood",
+      "forecast",
+      "hydrology"
+    ],
+    "optional_keywords": [
+      "remote sensing",
+      "rainfall",
+      "lead time"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q167",
+    "question": "What are major failure modes and mitigation strategies for flood forecasting with hybrid models in climate and geophysical systems?",
+    "domain": "earth_science",
+    "subdomain": "hydrology",
+    "required_keywords": [
+      "flood",
+      "forecast",
+      "hydrology"
+    ],
+    "optional_keywords": [
+      "remote sensing",
+      "rainfall",
+      "lead time"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q168",
+    "question": "Summarize benchmarked progress on flood forecasting with hybrid models in climate and geophysical systems and identify open problems.",
+    "domain": "earth_science",
+    "subdomain": "hydrology",
+    "required_keywords": [
+      "flood",
+      "forecast",
+      "hydrology"
+    ],
+    "optional_keywords": [
+      "remote sensing",
+      "rainfall",
+      "lead time"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q169",
+    "question": "Explain the current evidence and mechanisms for seismic inversion with neural operators in climate and geophysical systems.",
+    "domain": "earth_science",
+    "subdomain": "geophysics",
+    "required_keywords": [
+      "seismic",
+      "inversion",
+      "wavefield"
+    ],
+    "optional_keywords": [
+      "operator learning",
+      "regularization",
+      "resolution"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q170",
+    "question": "Compare leading methods for seismic inversion with neural operators in climate and geophysical systems, including known tradeoffs.",
+    "domain": "earth_science",
+    "subdomain": "geophysics",
+    "required_keywords": [
+      "seismic",
+      "inversion",
+      "wavefield"
+    ],
+    "optional_keywords": [
+      "operator learning",
+      "regularization",
+      "resolution"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q171",
+    "question": "What are major failure modes and mitigation strategies for seismic inversion with neural operators in climate and geophysical systems?",
+    "domain": "earth_science",
+    "subdomain": "geophysics",
+    "required_keywords": [
+      "seismic",
+      "inversion",
+      "wavefield"
+    ],
+    "optional_keywords": [
+      "operator learning",
+      "regularization",
+      "resolution"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q172",
+    "question": "Summarize benchmarked progress on seismic inversion with neural operators in climate and geophysical systems and identify open problems.",
+    "domain": "earth_science",
+    "subdomain": "geophysics",
+    "required_keywords": [
+      "seismic",
+      "inversion",
+      "wavefield"
+    ],
+    "optional_keywords": [
+      "operator learning",
+      "regularization",
+      "resolution"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q173",
+    "question": "Explain the current evidence and mechanisms for satellite methane plume detection in climate and geophysical systems.",
+    "domain": "earth_science",
+    "subdomain": "remote_sensing",
+    "required_keywords": [
+      "satellite",
+      "methane",
+      "detection"
+    ],
+    "optional_keywords": [
+      "spectral",
+      "false alarm",
+      "validation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q174",
+    "question": "Compare leading methods for satellite methane plume detection in climate and geophysical systems, including known tradeoffs.",
+    "domain": "earth_science",
+    "subdomain": "remote_sensing",
+    "required_keywords": [
+      "satellite",
+      "methane",
+      "detection"
+    ],
+    "optional_keywords": [
+      "spectral",
+      "false alarm",
+      "validation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q175",
+    "question": "What are major failure modes and mitigation strategies for satellite methane plume detection in climate and geophysical systems?",
+    "domain": "earth_science",
+    "subdomain": "remote_sensing",
+    "required_keywords": [
+      "satellite",
+      "methane",
+      "detection"
+    ],
+    "optional_keywords": [
+      "spectral",
+      "false alarm",
+      "validation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q176",
+    "question": "Summarize benchmarked progress on satellite methane plume detection in climate and geophysical systems and identify open problems.",
+    "domain": "earth_science",
+    "subdomain": "remote_sensing",
+    "required_keywords": [
+      "satellite",
+      "methane",
+      "detection"
+    ],
+    "optional_keywords": [
+      "spectral",
+      "false alarm",
+      "validation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q177",
+    "question": "Explain the current evidence and mechanisms for ocean heat uptake diagnostics in climate and geophysical systems.",
+    "domain": "earth_science",
+    "subdomain": "oceanography",
+    "required_keywords": [
+      "ocean",
+      "heat uptake",
+      "circulation"
+    ],
+    "optional_keywords": [
+      "stratification",
+      "reanalysis",
+      "trend"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q178",
+    "question": "Compare leading methods for ocean heat uptake diagnostics in climate and geophysical systems, including known tradeoffs.",
+    "domain": "earth_science",
+    "subdomain": "oceanography",
+    "required_keywords": [
+      "ocean",
+      "heat uptake",
+      "circulation"
+    ],
+    "optional_keywords": [
+      "stratification",
+      "reanalysis",
+      "trend"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q179",
+    "question": "What are major failure modes and mitigation strategies for ocean heat uptake diagnostics in climate and geophysical systems?",
+    "domain": "earth_science",
+    "subdomain": "oceanography",
+    "required_keywords": [
+      "ocean",
+      "heat uptake",
+      "circulation"
+    ],
+    "optional_keywords": [
+      "stratification",
+      "reanalysis",
+      "trend"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q180",
+    "question": "Summarize benchmarked progress on ocean heat uptake diagnostics in climate and geophysical systems and identify open problems.",
+    "domain": "earth_science",
+    "subdomain": "oceanography",
+    "required_keywords": [
+      "ocean",
+      "heat uptake",
+      "circulation"
+    ],
+    "optional_keywords": [
+      "stratification",
+      "reanalysis",
+      "trend"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q181",
+    "question": "Explain the current evidence and mechanisms for turbulence modeling for high-lift flows in aeronautics and space systems.",
+    "domain": "aerospace_engineering",
+    "subdomain": "aerodynamics",
+    "required_keywords": [
+      "turbulence",
+      "high-lift",
+      "CFD"
+    ],
+    "optional_keywords": [
+      "RANS",
+      "LES",
+      "validation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q182",
+    "question": "Compare leading methods for turbulence modeling for high-lift flows in aeronautics and space systems, including known tradeoffs.",
+    "domain": "aerospace_engineering",
+    "subdomain": "aerodynamics",
+    "required_keywords": [
+      "turbulence",
+      "high-lift",
+      "CFD"
+    ],
+    "optional_keywords": [
+      "RANS",
+      "LES",
+      "validation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q183",
+    "question": "What are major failure modes and mitigation strategies for turbulence modeling for high-lift flows in aeronautics and space systems?",
+    "domain": "aerospace_engineering",
+    "subdomain": "aerodynamics",
+    "required_keywords": [
+      "turbulence",
+      "high-lift",
+      "CFD"
+    ],
+    "optional_keywords": [
+      "RANS",
+      "LES",
+      "validation"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q184",
+    "question": "Summarize benchmarked progress on turbulence modeling for high-lift flows in aeronautics and space systems and identify open problems.",
+    "domain": "aerospace_engineering",
+    "subdomain": "aerodynamics",
+    "required_keywords": [
+      "turbulence",
+      "high-lift",
+      "CFD"
+    ],
+    "optional_keywords": [
+      "RANS",
+      "LES",
+      "validation"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q185",
+    "question": "Explain the current evidence and mechanisms for detonation and advanced propulsion cycles in aeronautics and space systems.",
+    "domain": "aerospace_engineering",
+    "subdomain": "propulsion",
+    "required_keywords": [
+      "propulsion",
+      "combustion",
+      "efficiency"
+    ],
+    "optional_keywords": [
+      "instability",
+      "emissions",
+      "cycle"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q186",
+    "question": "Compare leading methods for detonation and advanced propulsion cycles in aeronautics and space systems, including known tradeoffs.",
+    "domain": "aerospace_engineering",
+    "subdomain": "propulsion",
+    "required_keywords": [
+      "propulsion",
+      "combustion",
+      "efficiency"
+    ],
+    "optional_keywords": [
+      "instability",
+      "emissions",
+      "cycle"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q187",
+    "question": "What are major failure modes and mitigation strategies for detonation and advanced propulsion cycles in aeronautics and space systems?",
+    "domain": "aerospace_engineering",
+    "subdomain": "propulsion",
+    "required_keywords": [
+      "propulsion",
+      "combustion",
+      "efficiency"
+    ],
+    "optional_keywords": [
+      "instability",
+      "emissions",
+      "cycle"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q188",
+    "question": "Summarize benchmarked progress on detonation and advanced propulsion cycles in aeronautics and space systems and identify open problems.",
+    "domain": "aerospace_engineering",
+    "subdomain": "propulsion",
+    "required_keywords": [
+      "propulsion",
+      "combustion",
+      "efficiency"
+    ],
+    "optional_keywords": [
+      "instability",
+      "emissions",
+      "cycle"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q189",
+    "question": "Explain the current evidence and mechanisms for autonomous guidance in uncertain environments in aeronautics and space systems.",
+    "domain": "aerospace_engineering",
+    "subdomain": "guidance_control",
+    "required_keywords": [
+      "guidance",
+      "control",
+      "uncertainty"
+    ],
+    "optional_keywords": [
+      "robust",
+      "MPC",
+      "safety"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q190",
+    "question": "Compare leading methods for autonomous guidance in uncertain environments in aeronautics and space systems, including known tradeoffs.",
+    "domain": "aerospace_engineering",
+    "subdomain": "guidance_control",
+    "required_keywords": [
+      "guidance",
+      "control",
+      "uncertainty"
+    ],
+    "optional_keywords": [
+      "robust",
+      "MPC",
+      "safety"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q191",
+    "question": "What are major failure modes and mitigation strategies for autonomous guidance in uncertain environments in aeronautics and space systems?",
+    "domain": "aerospace_engineering",
+    "subdomain": "guidance_control",
+    "required_keywords": [
+      "guidance",
+      "control",
+      "uncertainty"
+    ],
+    "optional_keywords": [
+      "robust",
+      "MPC",
+      "safety"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q192",
+    "question": "Summarize benchmarked progress on autonomous guidance in uncertain environments in aeronautics and space systems and identify open problems.",
+    "domain": "aerospace_engineering",
+    "subdomain": "guidance_control",
+    "required_keywords": [
+      "guidance",
+      "control",
+      "uncertainty"
+    ],
+    "optional_keywords": [
+      "robust",
+      "MPC",
+      "safety"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q193",
+    "question": "Explain the current evidence and mechanisms for fatigue prediction for composite airframes in aeronautics and space systems.",
+    "domain": "aerospace_engineering",
+    "subdomain": "structures",
+    "required_keywords": [
+      "fatigue",
+      "composite",
+      "damage"
+    ],
+    "optional_keywords": [
+      "delamination",
+      "inspection",
+      "lifetime"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q194",
+    "question": "Compare leading methods for fatigue prediction for composite airframes in aeronautics and space systems, including known tradeoffs.",
+    "domain": "aerospace_engineering",
+    "subdomain": "structures",
+    "required_keywords": [
+      "fatigue",
+      "composite",
+      "damage"
+    ],
+    "optional_keywords": [
+      "delamination",
+      "inspection",
+      "lifetime"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q195",
+    "question": "What are major failure modes and mitigation strategies for fatigue prediction for composite airframes in aeronautics and space systems?",
+    "domain": "aerospace_engineering",
+    "subdomain": "structures",
+    "required_keywords": [
+      "fatigue",
+      "composite",
+      "damage"
+    ],
+    "optional_keywords": [
+      "delamination",
+      "inspection",
+      "lifetime"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q196",
+    "question": "Summarize benchmarked progress on fatigue prediction for composite airframes in aeronautics and space systems and identify open problems.",
+    "domain": "aerospace_engineering",
+    "subdomain": "structures",
+    "required_keywords": [
+      "fatigue",
+      "composite",
+      "damage"
+    ],
+    "optional_keywords": [
+      "delamination",
+      "inspection",
+      "lifetime"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q197",
+    "question": "Explain the current evidence and mechanisms for onboard autonomy for planetary missions in aeronautics and space systems.",
+    "domain": "aerospace_engineering",
+    "subdomain": "space_systems",
+    "required_keywords": [
+      "autonomy",
+      "spacecraft",
+      "navigation"
+    ],
+    "optional_keywords": [
+      "fault tolerance",
+      "planning",
+      "resource"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  },
+  {
+    "id": "q198",
+    "question": "Compare leading methods for onboard autonomy for planetary missions in aeronautics and space systems, including known tradeoffs.",
+    "domain": "aerospace_engineering",
+    "subdomain": "space_systems",
+    "required_keywords": [
+      "autonomy",
+      "spacecraft",
+      "navigation"
+    ],
+    "optional_keywords": [
+      "fault tolerance",
+      "planning",
+      "resource"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q199",
+    "question": "What are major failure modes and mitigation strategies for onboard autonomy for planetary missions in aeronautics and space systems?",
+    "domain": "aerospace_engineering",
+    "subdomain": "space_systems",
+    "required_keywords": [
+      "autonomy",
+      "spacecraft",
+      "navigation"
+    ],
+    "optional_keywords": [
+      "fault tolerance",
+      "planning",
+      "resource"
+    ],
+    "must_have_citations": 3,
+    "difficulty": "hard"
+  },
+  {
+    "id": "q200",
+    "question": "Summarize benchmarked progress on onboard autonomy for planetary missions in aeronautics and space systems and identify open problems.",
+    "domain": "aerospace_engineering",
+    "subdomain": "space_systems",
+    "required_keywords": [
+      "autonomy",
+      "spacecraft",
+      "navigation"
+    ],
+    "optional_keywords": [
+      "fault tolerance",
+      "planning",
+      "resource"
+    ],
+    "must_have_citations": 2,
+    "difficulty": "medium"
+  }
+]

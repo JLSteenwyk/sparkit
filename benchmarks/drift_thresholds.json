@@ -1,0 +1,18 @@
+{
+  "absolute": {
+    "min_average_rubric_score": 0.55,
+    "max_brier_score": 0.35,
+    "max_ece": 0.30,
+    "min_avg_citation_coverage": 0.50,
+    "max_avg_unsupported_claims": 1.50,
+    "max_avg_contradiction_flags": 2.00
+  },
+  "regression": {
+    "max_rubric_drop": 0.05,
+    "max_brier_increase": 0.03,
+    "max_ece_increase": 0.03,
+    "max_citation_coverage_drop": 0.05,
+    "max_avg_unsupported_increase": 0.30,
+    "max_avg_contradiction_increase": 0.30
+  }
+}
