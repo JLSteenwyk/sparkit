@@ -5,11 +5,14 @@ Last updated: 2026-02-20
 ## Priority 0 (next)
 1. Cost-accurate accounting + latency instrumentation.
 Impact: High. Effort: Low-Medium.
-Deliverable: exact per-provider pricing map, stage-level token+latency capture, and cost-confidence flags in reports.
-2. Answerability gating.
+Deliverable: exact per-provider/model pricing map and stage-level token accounting so every run (SPARKIT + direct baselines) reports accurate total/avg cost with clear confidence flags when fallback estimates are used.
+2. Fix direct single-call latency reporting.
+Impact: High. Effort: Low.
+Deliverable: capture real per-call latency in `scripts_capture_direct_baselines.py`/`direct_call_runner` instead of `0.0` so SPARKIT vs direct time comparisons are valid.
+3. Answerability gating.
 Impact: High. Effort: Low-Medium.
 Deliverable: policy gate that returns structured insufficient-evidence outcomes when retrieval/verifier quality is below threshold.
-3. Complete HLE149 routed run and publish SPARKIT vs direct comparison table.
+4. Complete HLE149 routed run and publish SPARKIT vs direct comparison table.
 Impact: High. Effort: Low.
 Deliverable: final HLE149 comparison across `single_openai`, `single_anthropic`, `routed_frontier`, and direct baselines.
 
