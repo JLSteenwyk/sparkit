@@ -24,7 +24,23 @@ Equivalent command:
 make baseline-capture-hle-biochem-20
 ```
 
+Faster parallel run options:
+```bash
+./venv/bin/python scripts_capture_baselines.py \
+  --questions benchmarks/hle_gold_bio_chem/questions_bio10_chem10.json \
+  --configs single_openai,single_anthropic,routed_frontier \
+  --max-questions 10 \
+  --parallel-workers 2 \
+  --parallel-configs 2 \
+  --skip-missing-keys
+```
+
 ## Run direct single-call baselines (no SPARKIT orchestration)
 ```bash
 make baseline-capture-direct-calls-hle20
+```
+
+## Repeated slices with confidence intervals
+```bash
+make benchmark-repeated-slices
 ```

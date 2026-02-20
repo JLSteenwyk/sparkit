@@ -27,5 +27,6 @@ Set these provider keys in the runtime environment (do not hardcode):
 - HLE bio/chem subset generation: `make benchmark-generate-hle-biochem-20`.
 - HLE bio/chem subset baseline capture: `make baseline-capture-hle-biochem-20`.
 - HLE bio/chem direct-call baselines (single raw API call per question): `make baseline-capture-direct-calls-hle20`.
+- Repeated-slice benchmark with CI: `make benchmark-repeated-slices`.
 - Full benchmark eval command: `make eval-benchmark-full`.
 - Drift check command (sample): `make drift-check-sample`.

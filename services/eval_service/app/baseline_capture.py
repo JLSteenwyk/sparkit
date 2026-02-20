@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 from dataclasses import dataclass
@@ -23,7 +24,6 @@ DEFAULT_CONFIGS = [
     BaselineConfig(name="single_gemini", mode="single", providers=["gemini"]),
     BaselineConfig(name="single_kimi", mode="single", providers=["kimi"]),
     BaselineConfig(name="routed_frontier", mode="routed", providers=["openai", "anthropic", "gemini"]),
-    BaselineConfig(name="ensemble_frontier", mode="ensemble", providers=["openai", "anthropic", "gemini"]),
 ]
 
 KEY_VARS = {
@@ -91,6 +91,8 @@ def capture_baselines(
     min_sources: int | None = None,
     max_latency_s: int = 120,
     max_cost_usd: float = 3.0,
+    parallel_workers: int = 1,
+    parallel_configs: int = 1,
 ) -> dict[str, Any]:
     run_slug = f"{label}_{timestamp_slug()}"
     destination = Path(output_dir) / run_slug
@@ -111,7 +113,7 @@ def capture_baselines(
         "configs": [],
     }
 
-    for config in configs:
+    def _run_config(config: BaselineConfig) -> dict[str, Any]:
         config_record: dict[str, Any] = {
             "name": config.name,
             "mode": config.mode,
@@ -121,8 +123,7 @@ def capture_baselines(
 
         if skip_missing_keys and not config_has_keys(config.providers):
             config_record["status"] = "skipped_missing_keys"
-            manifest["configs"].append(config_record)
-            continue
+            return config_record
 
         result = run_benchmark_with_predictions(
             questions_path=questions_path,
@@ -132,6 +133,7 @@ def capture_baselines(
             min_sources=min_sources,
             max_latency_s=max_latency_s,
             max_cost_usd=max_cost_usd,
+            parallel_workers=parallel_workers,
         )
 
         predictions_file = f"predictions_{config.name}.json"
@@ -165,7 +167,19 @@ def capture_baselines(
                 "token_usage_notes": result.get("usage_summary", {}).get("token_usage_notes", ""),
             }
         )
-        manifest["configs"].append(config_record)
+        return config_record
+
+    if max(1, parallel_configs) == 1:
+        for config in configs:
+            manifest["configs"].append(_run_config(config))
+    else:
+        by_name: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=max(1, parallel_configs)) as executor:
+            futures = {executor.submit(_run_config, config): config.name for config in configs}
+            for future in as_completed(futures):
+                by_name[futures[future]] = future.result()
+        for config in configs:
+            manifest["configs"].append(by_name[config.name])
 
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return manifest

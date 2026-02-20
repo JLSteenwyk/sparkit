@@ -29,7 +29,7 @@ Detect regressions in calibration and contradiction behavior early, and enforce 
 - Ensure `prompt_version`/`config_version` match intended run.
 
 2. Localize regression:
-- Compare candidate vs baseline manifests by config (`single_openai`, `routed_frontier`, `ensemble_frontier`, etc.).
+- Compare candidate vs baseline manifests by config (`single_openai`, `single_anthropic`, `routed_frontier`, etc.).
 - Identify whether issue is calibration (`ece`, `brier`) or evidence quality (`unsupported`, `contradiction`, citation coverage).
 
 3. Determine likely root cause:

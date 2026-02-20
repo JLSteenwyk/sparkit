@@ -30,6 +30,10 @@ Last updated: 2026-02-19
 - None.
 
 ## Recent updates
+- 2026-02-20: Removed `ensemble_frontier` from benchmark presets/workflows due to poor cost-performance tradeoff.
+- 2026-02-20: Added retrieval improvements in aggregator: lightweight query rewriting, relevance reranking, and source-diversity balancing.
+- 2026-02-20: Added benchmark parallelism controls (`--parallel-workers`, `--parallel-configs`) for faster baseline capture.
+- 2026-02-20: Added repeated-slice benchmarking with CI metrics (`scripts_benchmark_repeated_slices.py`).
 - 2026-02-19: Fixed direct/provider API compatibility: OpenAI GPT-5 uses `max_completion_tokens`; Kimi default temperature set to `1.0` with env override `KIMI_TEMPERATURE`.
 - 2026-02-19: Added direct single-call baseline infrastructure (`scripts_capture_direct_baselines.py`) to benchmark one raw API call/provider/question outside SPARKIT orchestration.
 - 2026-02-19: Added direct-call runner and tests (`services/eval_service/app/direct_call_runner.py`).

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -40,6 +41,7 @@ def run_benchmark(
     min_sources: int | None = None,
     max_latency_s: int = 120,
     max_cost_usd: float = 3.0,
+    parallel_workers: int = 1,
 ) -> dict:
     result = run_benchmark_with_predictions(
         questions_path=questions_path,
@@ -49,8 +51,65 @@ def run_benchmark(
         min_sources=min_sources,
         max_latency_s=max_latency_s,
         max_cost_usd=max_cost_usd,
+        parallel_workers=parallel_workers,
     )
     return result["report"]
+
+
+def _run_question(
+    idx: int,
+    question: Any,
+    mode: str,
+    providers: list[str],
+    min_sources: int | None,
+    max_latency_s: int,
+    max_cost_usd: float,
+) -> dict[str, Any]:
+    client = TestClient(gateway_app)
+    ask_response = client.post(
+        "/v1/ask",
+        json={
+            "question": question.question,
+            "mode": mode,
+            "providers": providers,
+            "constraints": {
+                "min_sources": min_sources if min_sources is not None else question.must_have_citations,
+                "max_latency_s": max_latency_s,
+                "max_cost_usd": max_cost_usd,
+            },
+        },
+    )
+    ask_response.raise_for_status()
+    run_id = ask_response.json()["run_id"]
+    run_response = client.get(f"/v1/runs/{run_id}").json()
+    usage = run_response.get("usage") or {}
+    trace_response = client.get(f"/v1/runs/{run_id}/trace")
+    trace_response.raise_for_status()
+    quality = (trace_response.json() or {}).get("quality_gates", {})
+    answer = run_response.get("answer") or {}
+    citations = run_response.get("citations") or []
+    prediction = Prediction(
+        id=question.id,
+        answer_text=answer.get("final_text", ""),
+        answer_confidence=answer.get("answer_confidence", 0.0),
+        citation_count=len(citations),
+    )
+    return {
+        "idx": idx,
+        "run_id": run_id,
+        "usage": {
+            "cost_usd": float(usage.get("cost_usd", 0.0)),
+            "latency_s": float(usage.get("latency_s", 0.0)),
+            "tokens_input": int(usage.get("tokens_input", 0)),
+            "tokens_output": int(usage.get("tokens_output", 0)),
+        },
+        "quality": {
+            "citation_coverage": float(quality.get("citation_coverage", 0.0)),
+            "unsupported_claims": int(quality.get("unsupported_claims", 0)),
+            "contradiction_flags": int(quality.get("contradiction_flags", 0)),
+        },
+        "prediction": prediction,
+    }
 
 
 def run_benchmark_with_predictions(
@@ -61,64 +120,55 @@ def run_benchmark_with_predictions(
     min_sources: int | None = None,
     max_latency_s: int = 120,
     max_cost_usd: float = 3.0,
+    parallel_workers: int = 1,
 ) -> dict[str, Any]:
     questions = load_questions(questions_path)
     if max_questions is not None:
         questions = questions[: max(0, max_questions)]
-    client = TestClient(gateway_app)
 
     predictions: list[Prediction] = []
     run_ids: list[str] = []
     quality_gates: list[dict[str, float | int]] = []
     usage_rows: list[dict[str, float | int]] = []
-    for question in questions:
-        ask_response = client.post(
-            "/v1/ask",
-            json={
-                "question": question.question,
-                "mode": mode,
-                "providers": providers or ["openai"],
-                "constraints": {
-                    "min_sources": min_sources if min_sources is not None else question.must_have_citations,
-                    "max_latency_s": max_latency_s,
-                    "max_cost_usd": max_cost_usd,
-                },
-            },
-        )
-        ask_response.raise_for_status()
-        run_id = ask_response.json()["run_id"]
-        run_ids.append(run_id)
-        run_response = client.get(f"/v1/runs/{run_id}").json()
-        usage = run_response.get("usage") or {}
-        usage_rows.append(
-            {
-                "cost_usd": float(usage.get("cost_usd", 0.0)),
-                "latency_s": float(usage.get("latency_s", 0.0)),
-                "tokens_input": int(usage.get("tokens_input", 0)),
-                "tokens_output": int(usage.get("tokens_output", 0)),
-            }
-        )
-        trace_response = client.get(f"/v1/runs/{run_id}/trace")
-        trace_response.raise_for_status()
-        quality = (trace_response.json() or {}).get("quality_gates", {})
-        quality_gates.append(
-            {
-                "citation_coverage": float(quality.get("citation_coverage", 0.0)),
-                "unsupported_claims": int(quality.get("unsupported_claims", 0)),
-                "contradiction_flags": int(quality.get("contradiction_flags", 0)),
-            }
-        )
-
-        answer = run_response.get("answer") or {}
-        citations = run_response.get("citations") or []
-        predictions.append(
-            Prediction(
-                id=question.id,
-                answer_text=answer.get("final_text", ""),
-                answer_confidence=answer.get("answer_confidence", 0.0),
-                citation_count=len(citations),
+    provider_list = providers or ["openai"]
+    workers = max(1, parallel_workers)
+    if workers == 1:
+        rows = [
+            _run_question(
+                idx=idx,
+                question=question,
+                mode=mode,
+                providers=provider_list,
+                min_sources=min_sources,
+                max_latency_s=max_latency_s,
+                max_cost_usd=max_cost_usd,
             )
-        )
+            for idx, question in enumerate(questions)
+        ]
+    else:
+        rows = []
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    _run_question,
+                    idx,
+                    question,
+                    mode,
+                    provider_list,
+                    min_sources,
+                    max_latency_s,
+                    max_cost_usd,
+                )
+                for idx, question in enumerate(questions)
+            ]
+            for future in as_completed(futures):
+                rows.append(future.result())
+
+    for row in sorted(rows, key=lambda item: int(item["idx"])):
+        run_ids.append(str(row["run_id"]))
+        usage_rows.append(dict(row["usage"]))
+        quality_gates.append(dict(row["quality"]))
+        predictions.append(row["prediction"])
 
     report = evaluate(questions, predictions)
     gate_count = max(1, len(quality_gates))

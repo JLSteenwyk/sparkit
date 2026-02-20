@@ -36,7 +36,6 @@ Outputs are written to `benchmarks/results/<label>_<timestamp>/` and include:
 - `single_gemini`
 - `single_kimi`
 - `routed_frontier` (`openai, anthropic, gemini`)
-- `ensemble_frontier` (`openai, anthropic, gemini`)
 
 Use environment keys:
 - `OPENAI_API_KEY`
