@@ -57,3 +57,42 @@ def test_run_direct_single_call_benchmark(monkeypatch, tmp_path: Path) -> None:
     assert result["usage_summary"]["total_tokens_output"] == 40
     assert result["report"]["direct_call"]["failure_count"] == 0
 
+
+def test_run_direct_single_call_counts_empty_answers_as_failure(monkeypatch, tmp_path: Path) -> None:
+    questions_path = tmp_path / "questions.json"
+    questions_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "q001",
+                    "question": "Explain an SN1 reaction mechanism.",
+                    "domain": "chemistry",
+                    "subdomain": "organic",
+                    "required_keywords": ["reaction", "mechanism"],
+                    "optional_keywords": [],
+                    "must_have_citations": 1,
+                    "difficulty": "medium",
+                }
+            ]
+        )
+    )
+
+    class _FakeResult:
+        success = True
+        text = ""
+        tokens_input = 30
+        tokens_input_cached = 0
+        tokens_output = 10
+        model = "fake-model"
+        error = None
+
+    monkeypatch.setattr(direct_runner, "generate_text", lambda provider, prompt, max_tokens=700: _FakeResult())
+
+    result = direct_runner.run_direct_single_call_benchmark_with_predictions(
+        questions_path=str(questions_path),
+        provider="openai",
+        max_questions=1,
+    )
+    assert result["report"]["direct_call"]["failure_count"] == 1
+    assert result["report"]["direct_call"]["failures"][0]["error"] == "empty_answer_text"
+    assert result["predictions"][0]["answer_confidence"] == 0.0

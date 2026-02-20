@@ -56,7 +56,18 @@ class OpenAIClient(BaseProviderClient):
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
             data = response.json()
-            text = data["choices"][0]["message"]["content"]
+            message = (data.get("choices") or [{}])[0].get("message") or {}
+            text = str(message.get("content", "") or "")
+            if not text.strip():
+                reasoning = str(message.get("reasoning_content", "") or "")
+                reason_suffix = " with reasoning_content" if reasoning.strip() else ""
+                return GenerationResult(
+                    provider=self.provider,
+                    model=self.model,
+                    text="",
+                    success=False,
+                    error=f"empty_content{reason_suffix}",
+                )
             usage = data.get("usage", {}) or {}
             return GenerationResult(
                 provider=self.provider,

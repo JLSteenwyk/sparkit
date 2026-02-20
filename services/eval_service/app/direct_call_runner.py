@@ -93,6 +93,15 @@ def run_direct_single_call_benchmark_with_predictions(
 
         if result.success:
             answer_text, answer_conf = _parse_direct_response(result.text)
+            if not answer_text.strip():
+                failures.append(
+                    {
+                        "id": question.id,
+                        "provider": provider,
+                        "error": "empty_answer_text",
+                    }
+                )
+                answer_conf = 0.0
         else:
             answer_text, answer_conf = "", 0.0
             failures.append(
@@ -165,4 +174,3 @@ def write_direct_single_call_report(
     (destination / f"predictions_direct_{provider}.json").write_text(json.dumps(result["predictions"], indent=2))
     (destination / f"report_direct_{provider}.json").write_text(json.dumps(result["report"], indent=2))
     return result
-
