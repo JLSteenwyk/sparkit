@@ -1,6 +1,6 @@
 # Progress Tracker
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 
 ## Project status
 - Overall phase: Advanced pipeline implementation
@@ -23,13 +23,19 @@ Last updated: 2026-02-19
 - Status: In progress
 
 ## Current sprint focus
-- Calibration and contradiction drift alerting.
-- Full official baseline capture execution on frontier providers.
+- Full HLE Gold bio/chem 149-question benchmark execution and comparison (SPARKIT vs direct single-call).
+- Cost/usage accuracy hardening and provider-response robustness fixes.
 
 ## Blockers
 - None.
 
 ## Recent updates
+- 2026-02-20: Diagnosed invalid benchmark runs caused by sandbox DNS/egress limits; re-ran benchmarks in network-enabled sessions.
+- 2026-02-20: Confirmed full direct single-call run completion for OpenAI/Anthropic/Gemini/Kimi on HLE149.
+- 2026-02-20: Confirmed SPARKIT `single_openai` and `single_anthropic` completed on HLE149; relaunched `routed_frontier` as dedicated long-running task.
+- 2026-02-20: Fixed Kimi direct-call handling for reasoning-only responses with empty `content`.
+- 2026-02-20: Updated direct-call runner to count empty parsed answers as explicit failures (`empty_answer_text`) to avoid misleading calibration metrics.
+- 2026-02-20: Added regression test for empty-answer direct-call failure handling.
 - 2026-02-20: Removed `ensemble_frontier` from benchmark presets/workflows due to poor cost-performance tradeoff.
 - 2026-02-20: Added retrieval improvements in aggregator: lightweight query rewriting, relevance reranking, and source-diversity balancing.
 - 2026-02-20: Added benchmark parallelism controls (`--parallel-workers`, `--parallel-configs`) for faster baseline capture.
@@ -53,7 +59,7 @@ Last updated: 2026-02-19
 - 2026-02-19: Added synthesis quality tests and validated suite (`27 passed, 2 skipped`).
 - 2026-02-19: Expanded benchmark set to `benchmarks/stem_exam_200/questions.json` with 200 STEM questions across 10 domains.
 - 2026-02-19: Added benchmark generation tool `scripts_generate_stem_exam_200.py`.
-- 2026-02-19: Added baseline capture workflow `scripts_capture_baselines.py` with single/routed/ensemble provider presets.
+- 2026-02-19: Added baseline capture workflow `scripts_capture_baselines.py` with single/routed provider presets (ensemble removed later).
 - 2026-02-19: Added eval runner support for `max_questions` and prediction export.
 - 2026-02-19: Added benchmark utility tests and validated suite (`24 passed, 2 skipped`).
 - 2026-02-19: Added prompt/config versioning and reproducibility metadata per run (fingerprinted record persisted in `runs.reproducibility_json`).

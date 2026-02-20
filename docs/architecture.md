@@ -1,6 +1,6 @@
 # Architecture (V1)
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 
 ## Goal
 Build a STEM-focused literature agent that answers complex questions through multi-round investigation, citation-grounded synthesis, and calibrated confidence scoring.
@@ -57,6 +57,9 @@ Build a STEM-focused literature agent that answers complex questions through mul
 11. Evaluate outputs via benchmark harness (rubric + ECE/Brier).
 12. Persist reproducibility metadata (prompt/config versions + stable fingerprint) with each run.
 13. Capture baseline manifests and per-run predictions for configured provider modes.
+
+Note:
+- Benchmark default presets currently use `single_*` and `routed_frontier`; `ensemble_frontier` is deprecated from standard benchmark workflows.
 
 ## Guardrails
 - Unsupported claims are counted in quality gates.

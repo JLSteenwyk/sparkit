@@ -1,6 +1,6 @@
 # Decision Log
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 
 ## ADR-0001: Multi-round investigation workflow
 - Date: 2026-02-19
@@ -81,3 +81,26 @@ Last updated: 2026-02-19
   - Prevent silent quality degradation in calibration and evidence-grounding behavior.
 - Consequences:
   - Requires maintaining threshold config and canonical baseline manifests.
+
+## ADR-0009: Deprecate `ensemble_frontier` from benchmark presets
+- Date: 2026-02-20
+- Status: Accepted
+- Decision:
+  - Remove `ensemble_frontier` from default benchmark capture presets and documented workflows.
+- Rationale:
+  - Observed cost-performance tradeoff was unfavorable versus routed/single configurations.
+- Consequences:
+  - Benchmark comparisons now center on `single_*` and `routed_frontier`.
+  - Ensemble code path remains available in orchestrator internals but is no longer part of standard benchmark runs.
+
+## ADR-0010: Treat empty direct-call outputs as failures
+- Date: 2026-02-20
+- Status: Accepted
+- Decision:
+  - In direct-call benchmarks, count empty parsed answer text as explicit failure.
+  - For Kimi, treat empty `message.content` responses as generation failures (even when `reasoning_content` exists).
+- Rationale:
+  - Prevent misleadingly low/optimistic calibration metrics from blank answers classified as successful calls.
+- Consequences:
+  - Direct baseline failure counts better reflect real usability.
+  - Historical direct Kimi runs with blank outputs should be treated as invalid and rerun.

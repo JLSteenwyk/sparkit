@@ -2,7 +2,7 @@
 
 This folder tracks architecture, implementation progress, and session handoff context for the literature fetching and reviewing agent.
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 
 ## How to use this folder
 - Start each work session by reading `docs/context.md` and `docs/progress.md`.
@@ -27,3 +27,8 @@ Last updated: 2026-02-19
 - `context.md`: end of every focused work session.
 - `progress.md`: whenever a task moves status.
 - `decisions.md`: whenever an architectural or policy decision is finalized.
+
+## Current emphasis
+- HLE149 benchmark tracking (SPARKIT vs direct single-call).
+- Cost-accounting accuracy and token-usage transparency.
+- Provider-specific response handling robustness (especially Kimi).

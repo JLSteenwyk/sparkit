@@ -1,41 +1,44 @@
 # Context Snapshot
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 
 ## What we are building
 A STEM literature fetching and reviewing agent that answers complex questions through multi-round investigation, citation-grounded synthesis, and confidence scoring.
 
 ## Current phase
-Advanced pipeline implementation.
+Advanced benchmarking and quality hardening.
 
 ## Completed in this session
-1. Added drift checker + thresholds:
-   - `services/eval_service/app/drift.py`
-   - `scripts_drift_check.py`
-   - `benchmarks/drift_thresholds.json`
-2. Extended baseline capture output with quality summary metrics:
-   - `avg_citation_coverage`
-   - `avg_unsupported_claims`
-   - `avg_contradiction_flags`
-3. Wired CI sample drift gate and weekly schedule (`.github/workflows/ci.yml`).
-4. Added drift tests and validated suite (`31 passed, 2 skipped`).
-5. Added drift triage policy doc (`docs/drift-policy.md`).
-6. Captured official manifest scaffold:
-   - `benchmarks/results/official_manifest_20260219T202304Z/manifest.json`
+1. Full HLE149 benchmark dataset materialized at:
+   - `benchmarks/hle_gold_bio_chem/questions_full.json`
+2. Completed direct single-call HLE149 baseline run:
+   - `benchmarks/results/hle_biochem_full_149_direct_escalated_20260220T021156Z/`
+3. Completed SPARKIT HLE149 `single_openai` and `single_anthropic` runs:
+   - `benchmarks/results/hle_biochem_full_149_escalated_20260220T021155Z/`
+4. Diagnosed invalid prior runs caused by sandbox DNS/egress limitations and re-ran in network-enabled sessions.
+5. Fixed Kimi direct-call anomaly:
+   - `services/orchestrator/app/providers/clients.py` now treats empty `message.content` as generation failure.
+   - `services/eval_service/app/direct_call_runner.py` now counts empty parsed answers as failures.
+6. Added regression test:
+   - `services/eval_service/tests/test_direct_call_runner.py`
+7. Relaunched `routed_frontier` as long-running task in detached tmux:
+   - label: `hle_biochem_full_149_routed_tmux`
+   - output: `benchmarks/results/hle_biochem_full_149_routed_tmux_20260220T061844Z/`
 
 ## Immediate next actions
-1. Run full official baseline capture with provider keys loaded:
-   - `make baseline-capture-official`
-2. Compare candidate runs against canonical baseline manifest:
-   - `make drift-check-manifest CANDIDATE_MANIFEST=... BASELINE_MANIFEST=...`
-3. Tune thresholds in `benchmarks/drift_thresholds.json` after first full official run.
+1. Wait for `routed_frontier` completion and collect:
+   - `report_routed_frontier.json`
+   - `predictions_routed_frontier.json`
+2. Finish patched Kimi-only rerun and compare against prior direct Kimi artifacts.
+3. Publish final SPARKIT vs direct comparison table for HLE149.
+4. Decide whether to extend exact token-pricing map to OpenAI/Anthropic/Gemini for accounting-grade cost reporting.
 
 ## Session handoff checklist
 - Activate env: `source venv/bin/activate`.
-- Ensure Postgres container is running.
-- Set `DATABASE_URL`.
-- Run `make db-upgrade`, `make test`, `make baseline-capture-official`, `make drift-check-sample`.
-- Continue from `docs/backlog.md` Priority 0.
+- Ensure provider keys are exported in shell environment.
+- For long-running jobs, prefer detached `tmux` sessions.
+- Run `make test` after provider/eval pipeline changes.
+- Continue from `docs/backlog.md` focusing on benchmark closure + cost precision.
 
 ## Provider key note
 Use provider credentials from environment variables only:
