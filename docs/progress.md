@@ -31,12 +31,16 @@ Last updated: 2026-02-21
 - None.
 
 ## Recent updates
+- 2026-02-21: Replaced stalled `hle_gold_direct_batch_c_*` run with split direct runs to avoid provider blocking:
+  - `hle_gold_direct_grok_split_20260221T024803Z`
+  - `hle_gold_direct_mistral_split_20260221T024803Z`
+- 2026-02-21: Pruned historical benchmark artifacts under `benchmarks/results/`; retained only active final HLE-gold suite directories (`hle_gold_*`).
 - 2026-02-21: Launched HLE-gold benchmark wave in tmux:
   - `hle_single_core_20260221T004327Z` (`single_openai,single_anthropic,single_gemini,single_kimi,single_deepseek,single_grok,single_mistral`)
   - `hle_single_overrides_20260221T004327Z` (`single_openai_pro,single_anthropic_sonnet`)
   - `hle_direct_a_20260221T004327Z` (`openai,anthropic,gemini`)
   - `hle_direct_b_20260221T004327Z` (`kimi,deepseek`)
-  - `hle_direct_c_20260221T004327Z` (`grok,mistral`)
+  - `hle_direct_c_20260221T004327Z` (`grok,mistral`) [cancelled/replaced by split runs above]
   - Outputs writing to `benchmarks/results/hle_gold_single_*` and `benchmarks/results/hle_gold_direct_batch_*`.
 - 2026-02-21: Added per-question failure indexing for SPARKIT benchmark runs (`failures_<config>.json`, `failure_count`, `failed_question_ids`) and direct baseline manifests (`failed_question_ids`) to support fair targeted reruns.
 - 2026-02-21: Hardened direct-call reliability for DeepSeek/Grok: added direct retry/backoff (`DIRECT_CALL_MAX_ATTEMPTS`, `DIRECT_CALL_RETRY_BACKOFF_S`), provider timeout controls (`SPARKIT_PROVIDER_TIMEOUT_S`, `<PROVIDER>_TIMEOUT_S`), and DeepSeek reasoning-content fallback when `message.content` is empty.

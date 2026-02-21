@@ -219,3 +219,109 @@ def test_run_direct_single_call_deepseek_reasoning_retry_hint(monkeypatch, tmp_p
     assert len(prompts) == 2
     assert "Provide final answer content in message.content only" in prompts[1]
     assert result["report"]["direct_call"]["failure_count"] == 0
+
+
+def test_run_direct_single_call_retries_empty_content_error(monkeypatch, tmp_path: Path) -> None:
+    questions_path = tmp_path / "questions.json"
+    questions_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "q001",
+                    "question": "What is an activation energy barrier?",
+                    "domain": "chemistry",
+                    "subdomain": "physical",
+                    "required_keywords": ["activation", "energy"],
+                    "optional_keywords": [],
+                    "must_have_citations": 1,
+                    "difficulty": "medium",
+                }
+            ]
+        )
+    )
+
+    class _FailResult:
+        success = False
+        text = ""
+        tokens_input = 0
+        tokens_input_cached = 0
+        tokens_output = 0
+        latency_s = 0.1
+        model = "fake-model"
+        error = "empty_content"
+
+    class _OkResult:
+        success = True
+        text = '{"answer_text":"Activation energy is the minimum barrier.","answer_confidence":0.7}'
+        tokens_input = 30
+        tokens_input_cached = 0
+        tokens_output = 20
+        latency_s = 0.1
+        model = "fake-model"
+        error = None
+
+    queue = [_FailResult(), _OkResult()]
+    monkeypatch.setenv("DIRECT_CALL_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("DIRECT_CALL_RETRY_BACKOFF_S", "0")
+    monkeypatch.setattr(direct_runner, "generate_text", lambda provider, prompt, max_tokens=700: queue.pop(0))
+
+    result = direct_runner.run_direct_single_call_benchmark_with_predictions(
+        questions_path=str(questions_path),
+        provider="openai",
+        max_questions=1,
+    )
+    assert result["report"]["direct_call"]["failure_count"] == 0
+    assert result["predictions"][0]["answer_text"]
+
+
+def test_run_direct_single_call_recovers_empty_answer_text(monkeypatch, tmp_path: Path) -> None:
+    questions_path = tmp_path / "questions.json"
+    questions_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "q001",
+                    "question": "What is a kinase?",
+                    "domain": "biology",
+                    "subdomain": "biochemistry",
+                    "required_keywords": ["kinase"],
+                    "optional_keywords": [],
+                    "must_have_citations": 1,
+                    "difficulty": "medium",
+                }
+            ]
+        )
+    )
+
+    class _EmptyButSuccess:
+        success = True
+        text = "   "
+        tokens_input = 10
+        tokens_input_cached = 0
+        tokens_output = 1
+        latency_s = 0.1
+        model = "fake-model"
+        error = None
+
+    class _Recovered:
+        success = True
+        text = '{"answer_text":"A kinase transfers phosphate groups.","answer_confidence":0.8}'
+        tokens_input = 20
+        tokens_input_cached = 0
+        tokens_output = 10
+        latency_s = 0.1
+        model = "fake-model"
+        error = None
+
+    queue = [_EmptyButSuccess(), _Recovered()]
+    monkeypatch.setenv("DIRECT_CALL_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("DIRECT_CALL_RETRY_BACKOFF_S", "0")
+    monkeypatch.setattr(direct_runner, "generate_text", lambda provider, prompt, max_tokens=700: queue.pop(0))
+
+    result = direct_runner.run_direct_single_call_benchmark_with_predictions(
+        questions_path=str(questions_path),
+        provider="anthropic",
+        max_questions=1,
+    )
+    assert result["report"]["direct_call"]["failure_count"] == 0
+    assert "kinase" in result["predictions"][0]["answer_text"].lower()

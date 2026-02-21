@@ -44,9 +44,14 @@ Advanced benchmarking and quality hardening.
 1. Monitor active tmux runs and capture completion manifests:
    - `hle_single_core_20260221T004327Z`
    - `hle_single_overrides_20260221T004327Z`
-   - `hle_direct_a_20260221T004327Z`
-   - `hle_direct_b_20260221T004327Z`
-   - `hle_direct_c_20260221T004327Z`
+   - `hle_single_gemini31_20260221T023731Z`
+   - `hle_direct_a_20260221T004327Z` (completed)
+   - `hle_direct_b_20260221T004327Z` (completed)
+   - `hle_direct_grok_split_20260221T024803Z`
+   - `hle_direct_mistral_split_20260221T024803Z`
+   - `hle_direct_anthropic_sonnet_20260221T023544Z`
+   - `hle_direct_gemini31_20260221T023544Z`
+   - `hle_direct_grok4_fast_reason_20260221T023544Z`
 2. Consolidate completed manifest outputs into final comparison table (quality + calibration + cost + latency).
 3. Use `failed_question_ids` / `failures_<config>.json` for targeted reruns to enforce fair comparisons.
 

@@ -20,9 +20,19 @@ _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 def _build_direct_prompt(question: str) -> str:
     return (
         "You are answering a STEM literature-style question.\n"
+        "Provide a high-level academic answer only; do not provide actionable lab protocols.\n"
         "Return strict JSON only with this schema:\n"
         '{"answer_text":"<final answer>","answer_confidence":<float 0..1>}.\n'
         "No markdown, no code fences, no extra keys.\n\n"
+        f"Question: {question}"
+    )
+
+
+def _build_direct_fallback_prompt(question: str) -> str:
+    return (
+        "Answer the STEM question concisely in plain text (1-4 sentences), "
+        "with a high-level academic explanation only (no actionable protocols). "
+        "Do not return JSON.\n\n"
         f"Question: {question}"
     )
 
@@ -72,6 +82,8 @@ def _should_retry(provider: str, error: str | None) -> bool:
     lowered = error.lower()
     if "timed out" in lowered or "timeout" in lowered:
         return True
+    if "empty_content" in lowered:
+        return True
     if provider.lower() == "deepseek" and "empty_content with reasoning_content" in lowered:
         return True
     if "too many requests" in lowered or "rate limit" in lowered:
@@ -105,6 +117,16 @@ def _generate_with_retries(provider: str, prompt: str, max_tokens: int) -> Any:
         if sleep_s > 0:
             time.sleep(sleep_s)
     return last
+
+
+def _recover_empty_answer(provider: str, prompt: str, max_tokens: int) -> Any:
+    retry_prompt = (
+        f"{prompt}\n\n"
+        "IMPORTANT: You must provide a non-empty answer_text value. "
+        "If uncertain, provide the best concise hypothesis. "
+        "Return strict JSON only."
+    )
+    return _generate_with_retries(provider, retry_prompt, max_tokens=max_tokens)
 
 
 def _summarize_usage(usage_rows: list[dict[str, float | int]]) -> dict[str, float | int]:
@@ -154,18 +176,32 @@ def run_direct_single_call_benchmark_with_predictions(
     for question in questions:
         prompt = _build_direct_prompt(question.question)
         result = _generate_with_retries(provider, prompt, max_tokens=max_tokens)
+        failed = False
+        failed_error = ""
 
         if result.success:
             answer_text, answer_conf = _parse_direct_response(result.text)
             if not answer_text.strip():
-                failures.append(
-                    {
-                        "id": question.id,
-                        "provider": provider,
-                        "error": "empty_answer_text",
-                    }
-                )
-                answer_conf = 0.0
+                recovered = _recover_empty_answer(provider, prompt, max_tokens=max_tokens)
+                if recovered.success:
+                    recovered_text, recovered_conf = _parse_direct_response(recovered.text)
+                    if recovered_text.strip():
+                        result = recovered
+                        answer_text, answer_conf = recovered_text, recovered_conf
+                    else:
+                        failures.append(
+                            {"id": question.id, "provider": provider, "error": "empty_answer_text"}
+                        )
+                        failed = True
+                        failed_error = "empty_answer_text"
+                        answer_conf = 0.0
+                else:
+                    failures.append(
+                        {"id": question.id, "provider": provider, "error": "empty_answer_text"}
+                    )
+                    failed = True
+                    failed_error = "empty_answer_text"
+                    answer_conf = 0.0
         else:
             answer_text, answer_conf = "", 0.0
             failures.append(
@@ -175,6 +211,22 @@ def run_direct_single_call_benchmark_with_predictions(
                     "error": result.error or "unknown_error",
                 }
             )
+            failed = True
+            failed_error = result.error or "unknown_error"
+
+        # Last-chance salvage so isolated prompt-format failures do not drop the question.
+        if failed and failed_error in {"empty_answer_text", "empty_content"}:
+            fallback_prompt = _build_direct_fallback_prompt(question.question)
+            fallback = _generate_with_retries(provider, fallback_prompt, max_tokens=max(1200, max_tokens))
+            if fallback.success:
+                fallback_text, fallback_conf = _parse_direct_response(fallback.text)
+                if fallback_text.strip():
+                    # Replace previous failure with recovered answer.
+                    failures = [
+                        item for item in failures if not (item.get("id") == question.id and item.get("provider") == provider)
+                    ]
+                    result = fallback
+                    answer_text, answer_conf = fallback_text, min(0.5, max(0.2, fallback_conf))
 
         predictions.append(
             Prediction(

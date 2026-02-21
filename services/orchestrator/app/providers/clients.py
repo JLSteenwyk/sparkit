@@ -153,14 +153,16 @@ class OpenAIClient(BaseProviderClient):
             text = str(message.get("content", "") or "")
             if not text.strip():
                 reasoning = str(message.get("reasoning_content", "") or "")
-                reason_suffix = " with reasoning_content" if reasoning.strip() else ""
-                return GenerationResult(
-                    provider=self.provider,
-                    model=self.model,
-                    text="",
-                    success=False,
-                    error=f"empty_content{reason_suffix}",
-                )
+                if reasoning.strip():
+                    text = reasoning
+                else:
+                    return GenerationResult(
+                        provider=self.provider,
+                        model=self.model,
+                        text="",
+                        success=False,
+                        error="empty_content",
+                    )
             usage = data.get("usage", {}) or {}
             return GenerationResult(
                 provider=self.provider,
@@ -211,6 +213,15 @@ class AnthropicClient(BaseProviderClient):
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
             data = response.json()
+            if str(data.get("stop_reason", "")).lower() == "refusal":
+                return GenerationResult(
+                    provider=self.provider,
+                    model=self.model,
+                    text="",
+                    success=False,
+                    latency_s=max(0.0, perf_counter() - started),
+                    error="refusal",
+                )
             text = ""
             for block in data.get("content", []):
                 if block.get("type") == "text":
@@ -268,15 +279,17 @@ class KimiClient(BaseProviderClient):
             text = str(message.get("content", "") or "")
             if not text.strip():
                 reasoning = str(message.get("reasoning_content", "") or "")
-                reason_suffix = " with reasoning_content" if reasoning.strip() else ""
-                return GenerationResult(
-                    provider=self.provider,
-                    model=self.model,
-                    text="",
-                    success=False,
-                    latency_s=max(0.0, perf_counter() - started),
-                    error=f"empty_content{reason_suffix}",
-                )
+                if reasoning.strip():
+                    text = reasoning
+                else:
+                    return GenerationResult(
+                        provider=self.provider,
+                        model=self.model,
+                        text="",
+                        success=False,
+                        latency_s=max(0.0, perf_counter() - started),
+                        error="empty_content",
+                    )
             usage = data.get("usage", {}) or {}
             return GenerationResult(
                 provider=self.provider,
