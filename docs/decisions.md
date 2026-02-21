@@ -104,3 +104,26 @@ Last updated: 2026-02-20
 - Consequences:
   - Direct baseline failure counts better reflect real usability.
   - Historical direct Kimi runs with blank outputs should be treated as invalid and rerun.
+
+## ADR-0011: Replace extended-effort with research-max mode (later deprecated)
+- Date: 2026-02-20
+- Status: Accepted
+- Decision:
+  - Remove `extended_effort` and add `research_max` mode for unconstrained deep reasoning.
+  - `research_max` runs decomposition, bucketed retrieval, evidence graphing, dual-solver synthesis, debate adjudication, and task-aware finalization.
+- Rationale:
+  - A deeper mode should be architecturally different from baseline, not just “more rounds”.
+- Consequences:
+  - Higher cost/latency per question when `research_max` is used.
+  - Requires separate benchmark tracking versus `single_*` and `routed`.
+  - Follow-up: mode removed from active API/benchmark surfaces after early benchmarks underperformed.
+
+## ADR-0012: Remove default latency cap
+- Date: 2026-02-20
+- Status: Accepted
+- Decision:
+  - `constraints.max_latency_s` is optional and defaults to `null` (no enforced latency cap).
+- Rationale:
+  - High-effort scientific runs should not be truncated by arbitrary default latency limits.
+- Consequences:
+  - Callers must explicitly set latency caps when strict SLOs are required.

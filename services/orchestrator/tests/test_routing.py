@@ -32,3 +32,12 @@ def test_ensemble_mode_picks_multiple_providers() -> None:
     ]
     plan = build_provider_plan(mode="ensemble", statuses=statuses, requested=["openai", "anthropic"])
     assert len(plan.ensemble) == 2
+
+
+def test_unknown_mode_falls_back_to_ensemble_behavior() -> None:
+    statuses = [
+        ProviderStatus(provider="openai", configured=True, env_var="OPENAI_API_KEY"),
+        ProviderStatus(provider="anthropic", configured=True, env_var="ANTHROPIC_API_KEY"),
+    ]
+    plan = build_provider_plan(mode="unknown", statuses=statuses, requested=["openai", "anthropic"])
+    assert plan.ensemble

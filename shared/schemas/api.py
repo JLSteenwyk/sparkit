@@ -19,6 +19,8 @@ class AskRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider_requirements(self) -> "AskRequest":
+        if self.mode == Mode.RESEARCH_MAX:
+            raise ValueError("mode=research_max is deprecated and no longer supported")
         if self.mode == Mode.SINGLE and not self.providers:
             raise ValueError("providers is required when mode=single")
         return self

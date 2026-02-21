@@ -16,20 +16,44 @@ class BaselineConfig:
     name: str
     mode: str
     providers: list[str]
+    model_overrides: dict[str, str] | None = None
 
 
 DEFAULT_CONFIGS = [
     BaselineConfig(name="single_openai", mode="single", providers=["openai"]),
+    BaselineConfig(
+        name="single_openai_pro",
+        mode="single",
+        providers=["openai"],
+        model_overrides={"OPENAI_MODEL": "gpt-5.2-pro"},
+    ),
     BaselineConfig(name="single_anthropic", mode="single", providers=["anthropic"]),
+    BaselineConfig(
+        name="single_anthropic_sonnet",
+        mode="single",
+        providers=["anthropic"],
+        model_overrides={"ANTHROPIC_MODEL": "claude-sonnet-4-6"},
+    ),
     BaselineConfig(name="single_gemini", mode="single", providers=["gemini"]),
     BaselineConfig(name="single_kimi", mode="single", providers=["kimi"]),
+    BaselineConfig(name="single_deepseek", mode="single", providers=["deepseek"]),
+    BaselineConfig(name="single_grok", mode="single", providers=["grok"]),
+    BaselineConfig(name="single_mistral", mode="single", providers=["mistral"]),
     BaselineConfig(name="routed_frontier", mode="routed", providers=["openai", "anthropic", "gemini"]),
+    BaselineConfig(
+        name="routed_frontier_plus",
+        mode="routed",
+        providers=["openai", "anthropic", "gemini", "deepseek", "grok", "mistral", "kimi"],
+    ),
 ]
 
 KEY_VARS = {
     "openai": ["OPENAI_API_KEY"],
     "anthropic": ["ANTHROPIC_API_KEY"],
     "kimi": ["KIMI_API_KEY"],
+    "deepseek": ["DEEPSEEK_API_KEY"],
+    "grok": ["GROK_API_KEY"],
+    "mistral": ["MISTRAL_API_KEY"],
     "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
 }
 
@@ -43,6 +67,9 @@ def key_status() -> dict[str, bool]:
         "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
         "ANTHROPIC_API_KEY": bool(os.getenv("ANTHROPIC_API_KEY")),
         "KIMI_API_KEY": bool(os.getenv("KIMI_API_KEY")),
+        "DEEPSEEK_API_KEY": bool(os.getenv("DEEPSEEK_API_KEY")),
+        "GROK_API_KEY": bool(os.getenv("GROK_API_KEY")),
+        "MISTRAL_API_KEY": bool(os.getenv("MISTRAL_API_KEY")),
         "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY")),
         "GOOGLE_API_KEY": bool(os.getenv("GOOGLE_API_KEY")),
     }
@@ -89,7 +116,7 @@ def capture_baselines(
     max_questions: int | None,
     skip_missing_keys: bool,
     min_sources: int | None = None,
-    max_latency_s: int = 120,
+    max_latency_s: int | None = None,
     max_cost_usd: float = 3.0,
     parallel_workers: int = 1,
     parallel_configs: int = 1,
@@ -97,6 +124,9 @@ def capture_baselines(
     run_slug = f"{label}_{timestamp_slug()}"
     destination = Path(output_dir) / run_slug
     destination.mkdir(parents=True, exist_ok=True)
+
+    if max(1, parallel_configs) > 1 and any(config.model_overrides for config in configs):
+        raise ValueError("parallel-configs > 1 is not supported when model_overrides are used.")
 
     manifest: dict[str, Any] = {
         "label": label,
@@ -118,6 +148,7 @@ def capture_baselines(
             "name": config.name,
             "mode": config.mode,
             "providers": config.providers,
+            "model_overrides": config.model_overrides or {},
             "required_key_vars": config_required_vars(config.providers),
         }
 
@@ -125,29 +156,45 @@ def capture_baselines(
             config_record["status"] = "skipped_missing_keys"
             return config_record
 
-        result = run_benchmark_with_predictions(
-            questions_path=questions_path,
-            mode=config.mode,
-            providers=config.providers,
-            max_questions=max_questions,
-            min_sources=min_sources,
-            max_latency_s=max_latency_s,
-            max_cost_usd=max_cost_usd,
-            parallel_workers=parallel_workers,
-        )
+        previous: dict[str, str | None] = {}
+        for env_name, env_value in (config.model_overrides or {}).items():
+            previous[env_name] = os.getenv(env_name)
+            os.environ[env_name] = env_value
+        try:
+            result = run_benchmark_with_predictions(
+                questions_path=questions_path,
+                mode=config.mode,
+                providers=config.providers,
+                max_questions=max_questions,
+                min_sources=min_sources,
+                max_latency_s=max_latency_s,
+                max_cost_usd=max_cost_usd,
+                parallel_workers=parallel_workers,
+            )
+        finally:
+            for env_name, old_value in previous.items():
+                if old_value is None:
+                    os.environ.pop(env_name, None)
+                else:
+                    os.environ[env_name] = old_value
 
         predictions_file = f"predictions_{config.name}.json"
         report_file = f"report_{config.name}.json"
+        failures_file = f"failures_{config.name}.json"
 
         (destination / predictions_file).write_text(json.dumps(result["predictions"], indent=2))
         (destination / report_file).write_text(json.dumps(result["report"], indent=2))
+        (destination / failures_file).write_text(json.dumps(result.get("failures", []), indent=2))
 
         config_record.update(
             {
                 "status": "completed",
                 "predictions_file": predictions_file,
                 "report_file": report_file,
+                "failures_file": failures_file,
                 "num_predictions": len(result["predictions"]),
+                "failure_count": len(result.get("failures", [])),
+                "failed_question_ids": [item.get("id") for item in result.get("failures", []) if item.get("id")],
                 "average_rubric_score": result["report"].get("average_rubric_score", 0.0),
                 "brier_score": result["report"].get("calibration", {}).get("brier_score", 0.0),
                 "ece": result["report"].get("calibration", {}).get("ece", 0.0),

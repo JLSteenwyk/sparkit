@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from time import perf_counter
 
 import httpx
 
@@ -19,6 +20,7 @@ class GenerationResult:
     tokens_input: int = 0
     tokens_input_cached: int = 0
     tokens_output: int = 0
+    latency_s: float = 0.0
     error: str | None = None
 
 
@@ -27,6 +29,96 @@ class BaseProviderClient:
 
     def generate(self, prompt: str, max_tokens: int = 800, timeout_s: float = 25.0) -> GenerationResult:
         raise NotImplementedError
+
+
+def _default_timeout_for_provider(provider: str) -> float:
+    tuned_defaults = {
+        "grok": 60.0,
+        "deepseek": 45.0,
+    }
+    per_provider = os.getenv(f"{provider.upper()}_TIMEOUT_S")
+    if per_provider:
+        try:
+            return max(1.0, float(per_provider))
+        except ValueError:
+            pass
+    default_timeout = tuned_defaults.get(provider.lower(), 35.0)
+    global_default = os.getenv("SPARKIT_PROVIDER_TIMEOUT_S", str(default_timeout))
+    try:
+        return max(1.0, float(global_default))
+    except ValueError:
+        return default_timeout
+
+
+class OpenAICompatibleClient(BaseProviderClient):
+    api_key: str
+    model: str
+    base_url: str
+    temperature: float
+    api_key_env_name: str
+    default_base_url: str
+    default_model: str
+    provider: str
+
+    def __init__(self) -> None:
+        self.api_key = os.getenv(self.api_key_env_name)
+        self.model = os.getenv(f"{self.provider.upper()}_MODEL", self.default_model)
+        self.base_url = os.getenv(f"{self.provider.upper()}_BASE_URL", self.default_base_url).rstrip("/")
+        self.temperature = float(os.getenv(f"{self.provider.upper()}_TEMPERATURE", "0.2"))
+        if not self.api_key:
+            raise ProviderClientError(f"{self.api_key_env_name} is not set")
+
+    def generate(self, prompt: str, max_tokens: int = 800, timeout_s: float = 25.0) -> GenerationResult:
+        url = f"{self.base_url}/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": self.temperature,
+        }
+        started = perf_counter()
+        try:
+            with httpx.Client(timeout=timeout_s) as client:
+                response = client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+            data = response.json()
+            message = (data.get("choices") or [{}])[0].get("message") or {}
+            text = str(message.get("content", "") or "")
+            if not text.strip():
+                reasoning = str(message.get("reasoning_content", "") or "")
+                if self.provider == "deepseek" and reasoning.strip():
+                    text = reasoning
+                else:
+                    reason_suffix = " with reasoning_content" if reasoning.strip() else ""
+                    return GenerationResult(
+                        provider=self.provider,
+                        model=self.model,
+                        text="",
+                        success=False,
+                        latency_s=max(0.0, perf_counter() - started),
+                        error=f"empty_content{reason_suffix}",
+                    )
+            usage = data.get("usage", {}) or {}
+            return GenerationResult(
+                provider=self.provider,
+                model=self.model,
+                text=text,
+                success=True,
+                tokens_input=int(usage.get("prompt_tokens", 0) or 0),
+                tokens_input_cached=int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)) or 0),
+                tokens_output=int(usage.get("completion_tokens", 0) or 0),
+                latency_s=max(0.0, perf_counter() - started),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return GenerationResult(
+                provider=self.provider,
+                model=self.model,
+                text="",
+                success=False,
+                latency_s=max(0.0, perf_counter() - started),
+                error=str(exc),
+            )
 
 
 class OpenAIClient(BaseProviderClient):
@@ -51,6 +143,7 @@ class OpenAIClient(BaseProviderClient):
             payload["max_completion_tokens"] = max_tokens
         else:
             payload["max_tokens"] = max_tokens
+        started = perf_counter()
         try:
             with httpx.Client(timeout=timeout_s) as client:
                 response = client.post(url, headers=headers, json=payload)
@@ -77,6 +170,7 @@ class OpenAIClient(BaseProviderClient):
                 tokens_input=int(usage.get("prompt_tokens", 0) or 0),
                 tokens_input_cached=int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)) or 0),
                 tokens_output=int(usage.get("completion_tokens", 0) or 0),
+                latency_s=max(0.0, perf_counter() - started),
             )
         except Exception as exc:  # noqa: BLE001
             return GenerationResult(
@@ -84,6 +178,7 @@ class OpenAIClient(BaseProviderClient):
                 model=self.model,
                 text="",
                 success=False,
+                latency_s=max(0.0, perf_counter() - started),
                 error=str(exc),
             )
 
@@ -110,6 +205,7 @@ class AnthropicClient(BaseProviderClient):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
         }
+        started = perf_counter()
         try:
             with httpx.Client(timeout=timeout_s) as client:
                 response = client.post(url, headers=headers, json=payload)
@@ -128,6 +224,7 @@ class AnthropicClient(BaseProviderClient):
                 tokens_input=int(usage.get("input_tokens", 0) or 0),
                 tokens_input_cached=int(usage.get("cache_read_input_tokens", 0) or 0),
                 tokens_output=int(usage.get("output_tokens", 0) or 0),
+                latency_s=max(0.0, perf_counter() - started),
             )
         except Exception as exc:  # noqa: BLE001
             return GenerationResult(
@@ -135,6 +232,7 @@ class AnthropicClient(BaseProviderClient):
                 model=self.model,
                 text="",
                 success=False,
+                latency_s=max(0.0, perf_counter() - started),
                 error=str(exc),
             )
 
@@ -144,7 +242,7 @@ class KimiClient(BaseProviderClient):
 
     def __init__(self) -> None:
         self.api_key = os.getenv("KIMI_API_KEY")
-        self.model = os.getenv("KIMI_MODEL", "kimi-k2.5")
+        self.model = os.getenv("KIMI_MODEL", "kimi-k2-turbo-preview")
         self.base_url = os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai").rstrip("/")
         # Kimi K2 variants require temperature=1 on this endpoint.
         self.temperature = float(os.getenv("KIMI_TEMPERATURE", "1.0"))
@@ -160,12 +258,25 @@ class KimiClient(BaseProviderClient):
             "max_tokens": max_tokens,
             "temperature": self.temperature,
         }
+        started = perf_counter()
         try:
             with httpx.Client(timeout=timeout_s) as client:
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
             data = response.json()
-            text = data["choices"][0]["message"]["content"]
+            message = (data.get("choices") or [{}])[0].get("message") or {}
+            text = str(message.get("content", "") or "")
+            if not text.strip():
+                reasoning = str(message.get("reasoning_content", "") or "")
+                reason_suffix = " with reasoning_content" if reasoning.strip() else ""
+                return GenerationResult(
+                    provider=self.provider,
+                    model=self.model,
+                    text="",
+                    success=False,
+                    latency_s=max(0.0, perf_counter() - started),
+                    error=f"empty_content{reason_suffix}",
+                )
             usage = data.get("usage", {}) or {}
             return GenerationResult(
                 provider=self.provider,
@@ -175,6 +286,7 @@ class KimiClient(BaseProviderClient):
                 tokens_input=int(usage.get("prompt_tokens", 0) or 0),
                 tokens_input_cached=int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)) or 0),
                 tokens_output=int(usage.get("completion_tokens", 0) or 0),
+                latency_s=max(0.0, perf_counter() - started),
             )
         except Exception as exc:  # noqa: BLE001
             return GenerationResult(
@@ -182,6 +294,7 @@ class KimiClient(BaseProviderClient):
                 model=self.model,
                 text="",
                 success=False,
+                latency_s=max(0.0, perf_counter() - started),
                 error=str(exc),
             )
 
@@ -204,6 +317,7 @@ class GeminiClient(BaseProviderClient):
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens},
         }
+        started = perf_counter()
         try:
             with httpx.Client(timeout=timeout_s) as client:
                 response = client.post(url, json=payload)
@@ -222,6 +336,7 @@ class GeminiClient(BaseProviderClient):
                 success=True,
                 tokens_input=int(usage.get("promptTokenCount", 0) or 0),
                 tokens_output=int(usage.get("candidatesTokenCount", 0) or 0),
+                latency_s=max(0.0, perf_counter() - started),
             )
         except Exception as exc:  # noqa: BLE001
             return GenerationResult(
@@ -229,8 +344,30 @@ class GeminiClient(BaseProviderClient):
                 model=self.model,
                 text="",
                 success=False,
+                latency_s=max(0.0, perf_counter() - started),
                 error=str(exc),
             )
+
+
+class DeepSeekClient(OpenAICompatibleClient):
+    provider = "deepseek"
+    api_key_env_name = "DEEPSEEK_API_KEY"
+    default_base_url = "https://api.deepseek.com"
+    default_model = "deepseek-reasoner"
+
+
+class GrokClient(OpenAICompatibleClient):
+    provider = "grok"
+    api_key_env_name = "GROK_API_KEY"
+    default_base_url = "https://api.x.ai"
+    default_model = "grok-4-0709"
+
+
+class MistralClient(OpenAICompatibleClient):
+    provider = "mistral"
+    api_key_env_name = "MISTRAL_API_KEY"
+    default_base_url = "https://api.mistral.ai"
+    default_model = "mistral-large-2512"
 
 
 def make_provider_client(provider: str) -> BaseProviderClient:
@@ -241,12 +378,18 @@ def make_provider_client(provider: str) -> BaseProviderClient:
         return AnthropicClient()
     if normalized == "kimi":
         return KimiClient()
+    if normalized == "deepseek":
+        return DeepSeekClient()
+    if normalized == "grok":
+        return GrokClient()
+    if normalized == "mistral":
+        return MistralClient()
     if normalized in {"gemini", "google"}:
         return GeminiClient()
     raise ProviderClientError(f"Unsupported provider: {provider}")
 
 
-def generate_text(provider: str, prompt: str, max_tokens: int = 800) -> GenerationResult:
+def generate_text(provider: str, prompt: str, max_tokens: int = 800, timeout_s: float | None = None) -> GenerationResult:
     try:
         client = make_provider_client(provider)
     except Exception as exc:  # noqa: BLE001
@@ -257,4 +400,5 @@ def generate_text(provider: str, prompt: str, max_tokens: int = 800) -> Generati
             success=False,
             error=str(exc),
         )
-    return client.generate(prompt=prompt, max_tokens=max_tokens)
+    resolved_timeout = timeout_s if timeout_s is not None else _default_timeout_for_provider(provider)
+    return client.generate(prompt=prompt, max_tokens=max_tokens, timeout_s=resolved_timeout)

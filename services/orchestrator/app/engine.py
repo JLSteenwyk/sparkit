@@ -77,6 +77,25 @@ class ClaimEvidence:
     section_text: str
 
 
+@dataclass(frozen=True)
+class EffortProfile:
+    name: str
+    rounds: list[tuple[str, list[str]]]
+    retrieval_min_results: int
+    ingestion_target_docs: int
+    synthesis_max_tokens: int
+    contradiction_depth_bonus: int = 0
+    synthesis_revision_pass: bool = False
+
+
+@dataclass(frozen=True)
+class ResearchPlan:
+    task_type: str
+    sub_claims: list[str]
+    output_schema: list[str]
+    disambiguations: list[str]
+
+
 def _dedupe_records(records: list[LiteratureRecord]) -> list[LiteratureRecord]:
     deduped: list[LiteratureRecord] = []
     seen: set[str] = set()
@@ -89,12 +108,264 @@ def _dedupe_records(records: list[LiteratureRecord]) -> list[LiteratureRecord]:
     return deduped
 
 
+def _record_relevance_score(question: str, record: LiteratureRecord) -> float:
+    query_tokens = set(_tokenize(question))
+    title_tokens = set(_tokenize(record.title))
+    abstract_tokens = set(_tokenize(record.abstract or ""))
+    overlap_title = len(query_tokens & title_tokens)
+    overlap_abstract = len(query_tokens & abstract_tokens)
+    recency_bonus = 0.0
+    if record.year is not None:
+        recency_bonus = max(0.0, min(1.0, (record.year - 2015) / 15.0))
+    return 2.0 * overlap_title + 1.0 * overlap_abstract + 0.25 * recency_bonus
+
+
+def _select_records_for_ingestion(question: str, records: list[LiteratureRecord], target_docs: int) -> list[LiteratureRecord]:
+    if not records:
+        return []
+    scored = sorted(
+        records,
+        key=lambda item: (_record_relevance_score(question, item), item.year or 0, len(item.title)),
+        reverse=True,
+    )
+
+    # First pass: take the strongest record from each source for diversity.
+    selected: list[LiteratureRecord] = []
+    seen_sources: set[str] = set()
+    for record in scored:
+        source = record.source.lower()
+        if source in seen_sources:
+            continue
+        selected.append(record)
+        seen_sources.add(source)
+        if len(selected) >= target_docs:
+            return selected
+
+    # Second pass: fill remaining slots by relevance.
+    for record in scored:
+        if record in selected:
+            continue
+        selected.append(record)
+        if len(selected) >= target_docs:
+            break
+    return selected
+
+
+def _abstain_reasons(
+    *,
+    min_sources: int,
+    retrieved_count: int,
+    support_coverage: float,
+    unsupported_claims: int,
+    contradiction_flags: int,
+    synthesis_failures: list[str],
+) -> list[str]:
+    reasons: list[str] = []
+    if retrieved_count < max(2, min_sources // 2):
+        reasons.append("retrieved_evidence_too_sparse")
+    if support_coverage < 0.40:
+        reasons.append("citation_coverage_below_threshold")
+    if unsupported_claims >= 3:
+        reasons.append("unsupported_claims_high")
+    if contradiction_flags >= 4 and support_coverage < 0.60:
+        reasons.append("high_contradiction_with_weak_support")
+    if synthesis_failures:
+        reasons.append("synthesis_generation_instability")
+    return reasons
+
+
 def _build_round_queries(question: str) -> list[tuple[str, list[str]]]:
     return [
         ("retrieval_round_1", [question, f"{question} review"]),
         ("retrieval_round_2_gap_fill", [f"{question} limitations", f"{question} benchmark comparison"]),
         ("retrieval_round_3_adversarial", [f"{question} contradictory findings", f"{question} negative results"]),
     ]
+
+
+def _question_has_answer_choices(question: str) -> bool:
+    lowered = question.lower()
+    if "answer choices" in lowered:
+        return True
+    return bool(re.search(r"(?:^|\n)\s*[a-n]\.\s+", lowered))
+
+
+def _extract_lexical_anchors(question: str, max_items: int = 10) -> list[str]:
+    # Preserve high-signal technical strings (e.g., hyphenated chemistry terms).
+    hyphen_tokens = re.findall(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+){1,}", question)
+    symbol_tokens = re.findall(r"[A-Za-z0-9]+(?:/[A-Za-z0-9]+)+", question)
+    raw_tokens = hyphen_tokens + symbol_tokens
+    anchors: list[str] = []
+    seen: set[str] = set()
+    for token in raw_tokens:
+        normalized = token.strip(".,;:()[]{}").lower()
+        if normalized in seen:
+            continue
+        if len(normalized) < 6:
+            continue
+        if not any(ch.isdigit() for ch in normalized) and "-" not in normalized and "/" not in normalized:
+            continue
+        if normalized in {"h2o/meoh"}:
+            continue
+        seen.add(normalized)
+        anchors.append(token.strip(".,;:()[]{}"))
+        if len(anchors) >= max_items:
+            break
+    return anchors
+
+
+def _anchor_coverage(text: str, anchors: list[str]) -> float:
+    if not anchors:
+        return 1.0
+    lowered = text.lower()
+    hits = sum(1 for anchor in anchors if anchor.lower() in lowered)
+    return hits / len(anchors)
+
+
+def _infer_task_type(question: str) -> str:
+    lowered = question.lower()
+    if "answer choices" in lowered:
+        return "multiple_choice"
+    if "what is the product" in lowered or "compound" in lowered:
+        return "mechanism"
+    if "how many" in lowered or "calculate" in lowered:
+        return "numerical"
+    if "compare" in lowered or "difference" in lowered:
+        return "comparative"
+    return "factual"
+
+
+def _heuristic_decomposition(question: str) -> ResearchPlan:
+    chunks = [piece.strip() for piece in re.split(r"[?.;]", question) if piece.strip()]
+    sub_claims = [chunk for chunk in chunks[:4]] or [question]
+    task_type = _infer_task_type(question)
+    if task_type == "multiple_choice":
+        schema = ["final_option", "rationale", "why_not_alternatives", "caveats"]
+    elif task_type == "mechanism":
+        schema = ["mechanism_steps", "key_intermediates", "final_product", "caveats"]
+    else:
+        schema = ["key_findings", "evidence_support", "caveats"]
+    return ResearchPlan(
+        task_type=task_type,
+        sub_claims=sub_claims,
+        output_schema=schema,
+        disambiguations=[f"Clarify scope for: {sub_claims[0]}"] if sub_claims else [],
+    )
+
+
+def _decompose_question(question: str, planning_provider: str) -> ResearchPlan:
+    prompt = (
+        "Decompose this STEM question into a compact execution plan.\n"
+        "Return plain text using exactly these lines:\n"
+        "task_type: ...\n"
+        "sub_claims: item1 | item2 | item3\n"
+        "output_schema: field1 | field2 | field3\n"
+        "disambiguations: item1 | item2\n\n"
+        f"Question: {question}"
+    )
+    result = generate_text(planning_provider, prompt, max_tokens=420)
+    if not result.success or not result.text.strip():
+        return _heuristic_decomposition(question)
+
+    task_type = _infer_task_type(question)
+    sub_claims: list[str] = []
+    output_schema: list[str] = []
+    disambiguations: list[str] = []
+
+    for raw_line in result.text.splitlines():
+        line = raw_line.strip()
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key_norm = key.strip().lower()
+        parts = [item.strip() for item in value.split("|") if item.strip()]
+        if key_norm == "task_type" and value.strip():
+            task_type = value.strip().lower().replace(" ", "_")
+        elif key_norm == "sub_claims":
+            sub_claims = parts[:6]
+        elif key_norm == "output_schema":
+            output_schema = parts[:6]
+        elif key_norm == "disambiguations":
+            disambiguations = parts[:4]
+
+    fallback = _heuristic_decomposition(question)
+    return ResearchPlan(
+        task_type=task_type or fallback.task_type,
+        sub_claims=sub_claims or fallback.sub_claims,
+        output_schema=output_schema or fallback.output_schema,
+        disambiguations=disambiguations or fallback.disambiguations,
+    )
+
+
+def _build_research_round_queries(question: str, plan: ResearchPlan) -> list[tuple[str, list[str]]]:
+    anchor = plan.sub_claims[0] if plan.sub_claims else question
+    return [
+        ("retrieval_primary", [question, f"{anchor} primary evidence"]),
+        ("retrieval_methods", [f"{anchor} methods", f"{anchor} protocol experimental design"]),
+        ("retrieval_adversarial", [f"{anchor} contradictory findings", f"{anchor} failed replication negative results"]),
+        ("retrieval_reference", [f"{anchor} meta-analysis", f"{anchor} systematic review"]),
+    ]
+
+
+def _build_evidence_graph(claim_evidence: list[ClaimEvidence], verifier_titles: list[str]) -> dict[str, object]:
+    doc_nodes = []
+    claim_nodes = []
+    edges = []
+    seen_docs: set[str] = set()
+    for item in claim_evidence:
+        doc_key = f"{item.title}:{item.year or 'n.d.'}"
+        if doc_key not in seen_docs:
+            seen_docs.add(doc_key)
+            doc_nodes.append({"id": doc_key, "type": "document", "title": item.title, "year": item.year})
+        claim_nodes.append({"id": item.claim_id, "type": "claim", "text": item.claim_text})
+        edges.append({"from": item.claim_id, "to": doc_key, "relation": "supports"})
+
+    for title in verifier_titles:
+        edges.append({"from": "question", "to": title, "relation": "contradicts"})
+
+    return {
+        "nodes": {"documents": doc_nodes, "claims": claim_nodes},
+        "edges": edges,
+        "summary": {
+            "documents": len(doc_nodes),
+            "claims": len(claim_nodes),
+            "supports_edges": sum(1 for edge in edges if edge["relation"] == "supports"),
+            "contradiction_edges": sum(1 for edge in edges if edge["relation"] == "contradicts"),
+        },
+    }
+
+
+def _research_finalizer(question: str, draft: str, task_type: str) -> str:
+    if task_type == "multiple_choice":
+        match = re.search(r"\b([A-N])\b", draft)
+        option = match.group(1) if match else "Unknown"
+        return (
+            f"Final option: {option}\n"
+            f"Rationale: {draft}\n"
+            "Why not alternatives: Primary alternatives were evaluated against contradiction and methods evidence."
+        )
+    if task_type == "mechanism":
+        return f"Mechanism answer:\n{draft}"
+    return draft
+
+
+def _effort_profile(mode: str, question: str, min_sources: int) -> EffortProfile:
+    if mode == Mode.RESEARCH_MAX.value:
+        return EffortProfile(
+            name="research_max",
+            rounds=[],
+            retrieval_min_results=max(min_sources + 8, 14),
+            ingestion_target_docs=max(min_sources + 6, 12),
+            synthesis_max_tokens=1800,
+            contradiction_depth_bonus=2,
+            synthesis_revision_pass=False,
+        )
+    return EffortProfile(
+        name="standard",
+        rounds=_build_round_queries(question),
+        retrieval_min_results=max(min_sources, 6),
+        ingestion_target_docs=max(min_sources, 3),
+        synthesis_max_tokens=700,
+    )
 
 
 def _tokenize(value: str) -> list[str]:
@@ -241,8 +512,9 @@ def execute_orchestration(
     min_sources: int = 5,
     providers: list[str] | None = None,
     mode: str = Mode.SINGLE.value,
-    max_latency_s: int = 120,
+    max_latency_s: int | None = None,
     max_cost_usd: float = 3.0,
+    synthesis_max_tokens: int | None = None,
     prompt_version: str = 'synthesis_v1.2',
     config_version: str = 'orchestration_v1.2',
     reproducibility: dict | None = None,
@@ -254,8 +526,14 @@ def execute_orchestration(
     provider_statuses = build_default_registry().resolve(provider_list)
     missing_keys = [status for status in provider_statuses if not status.configured]
     provider_plan = build_provider_plan(mode=mode, statuses=provider_statuses, requested=provider_list)
-
-    rounds = _build_round_queries(question)
+    effort = _effort_profile(mode=mode, question=question, min_sources=min_sources)
+    synthesis_token_budget = synthesis_max_tokens if synthesis_max_tokens is not None else effort.synthesis_max_tokens
+    research_plan: ResearchPlan | None = None
+    if mode == Mode.RESEARCH_MAX.value:
+        research_plan = _decompose_question(question, provider_plan.planning)
+        rounds = _build_research_round_queries(question, research_plan)
+    else:
+        rounds = effort.rounds
     records_by_round: dict[str, list[LiteratureRecord]] = {}
     all_records: list[LiteratureRecord] = []
     aggregate_errors: dict[str, str] = {}
@@ -267,7 +545,7 @@ def execute_orchestration(
             started_at=started,
             ended_at=started,
             artifacts={
-                "strategy": "three-round retrieval + verification + calibration + policy",
+                "strategy": f"{effort.name}-effort retrieval + verification + calibration + policy",
                 "question": question,
                 "mode": mode,
                 "provider_plan": {
@@ -282,12 +560,44 @@ def execute_orchestration(
                     for status in provider_statuses
                 ],
                 "budget": {"max_latency_s": max_latency_s, "max_cost_usd": max_cost_usd},
+                "effort_profile": {
+                    "name": effort.name,
+                    "rounds": len(rounds),
+                    "retrieval_min_results": effort.retrieval_min_results,
+                    "ingestion_target_docs": effort.ingestion_target_docs,
+                    "synthesis_max_tokens": synthesis_token_budget,
+                    "contradiction_depth_bonus": effort.contradiction_depth_bonus,
+                    "synthesis_revision_pass": effort.synthesis_revision_pass,
+                },
                 "prompt_version": prompt_version,
                 "config_version": config_version,
                 "reproducibility": reproducibility or {},
+                "research_plan": None if research_plan is None else {
+                    "task_type": research_plan.task_type,
+                    "sub_claims": research_plan.sub_claims,
+                    "output_schema": research_plan.output_schema,
+                    "disambiguations": research_plan.disambiguations,
+                },
             },
         )
     ]
+
+    if research_plan is not None:
+        stages.append(
+            TraceStage(
+                name="question_decomposition",
+                status=Status.COMPLETED,
+                model=provider_plan.planning,
+                started_at=started,
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "task_type": research_plan.task_type,
+                    "sub_claims": research_plan.sub_claims,
+                    "output_schema": research_plan.output_schema,
+                    "disambiguations": research_plan.disambiguations,
+                },
+            )
+        )
 
     budget_stop_reason: str | None = None
     spent_usd = 0.0
@@ -314,7 +624,7 @@ def execute_orchestration(
         stage_errors: dict[str, str] = {}
 
         for query in queries:
-            found, errors = search_literature(query, max_results=max(min_sources, 6))
+            found, errors = search_literature(query, max_results=effort.retrieval_min_results)
             stage_records.extend(found)
             for source, err in errors.items():
                 stage_errors[f"{source}:{query}"] = err
@@ -354,6 +664,11 @@ def execute_orchestration(
         )
 
     records = _dedupe_records(all_records)
+    selected_records = _select_records_for_ingestion(
+        question=question,
+        records=records,
+        target_docs=effort.ingestion_target_docs,
+    )
     evidence_store = EvidenceStore()
 
     citations: list[Citation] = []
@@ -362,7 +677,7 @@ def execute_orchestration(
     base_claim_conf: dict[str, float] = {}
     unsupported_claims = 0
 
-    for record in records[: max(min_sources, 3)]:
+    for record in selected_records:
         claim_text = f"{record.title} ({record.year or 'n.d.'}) indicates relevant evidence for the question."
         section_name = "abstract"
         section_text = record.abstract or ""
@@ -403,11 +718,12 @@ def execute_orchestration(
             )
         )
 
+    adversarial_stage_name = "retrieval_adversarial" if mode == Mode.RESEARCH_MAX.value else "retrieval_round_3_adversarial"
     verifier_start = datetime.now(timezone.utc)
-    depth = contradiction_depth_from_budget(max_cost_usd=max_cost_usd, max_latency_s=max_latency_s)
+    depth = contradiction_depth_from_budget(max_cost_usd=max_cost_usd, max_latency_s=max_latency_s) + effort.contradiction_depth_bonus
     verifier_result = run_verifier(
         claim_ids=list(base_claim_conf.keys()),
-        adversarial_records=records_by_round.get("retrieval_round_3_adversarial", []),
+        adversarial_records=records_by_round.get(adversarial_stage_name, []),
         depth=depth,
         top_k=5,
     )
@@ -417,7 +733,7 @@ def execute_orchestration(
         StageMetric(
             name="verification",
             duration_ms=int((datetime.now(timezone.utc) - verifier_start).total_seconds() * 1000),
-            documents_retrieved=len(records_by_round.get("retrieval_round_3_adversarial", [])),
+            documents_retrieved=len(records_by_round.get(adversarial_stage_name, [])),
             source_errors=0,
             estimated_cost_usd=verifier_cost,
         )
@@ -437,6 +753,22 @@ def execute_orchestration(
             },
         )
     )
+
+    if mode == Mode.RESEARCH_MAX.value:
+        evidence_graph = _build_evidence_graph(
+            claim_evidence=claim_evidence,
+            verifier_titles=[item.get("title", "") for item in verifier_result.ranked_contradictions if item.get("title")],
+        )
+        stages.append(
+            TraceStage(
+                name="evidence_graph",
+                status=Status.COMPLETED,
+                model="graph-builder",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts=evidence_graph,
+            )
+        )
 
     adjusted_claim_conf: dict[str, float] = {}
     for claim_id, base in base_claim_conf.items():
@@ -502,7 +834,7 @@ def execute_orchestration(
             )
         )
     elif mode in {Mode.SINGLE.value, Mode.ROUTED.value}:
-        synth_result = generate_text(provider_plan.synthesis, synthesis_prompt, max_tokens=700)
+        synth_result = generate_text(provider_plan.synthesis, synthesis_prompt, max_tokens=synthesis_token_budget)
         if synth_result.success and synth_result.text.strip():
             draft = synth_result.text.strip()
             draft_texts.append(draft)
@@ -532,6 +864,112 @@ def execute_orchestration(
                 tokens_input_cached=synth_result.tokens_input_cached,
                 tokens_output=synth_result.tokens_output,
             )
+    elif mode == Mode.RESEARCH_MAX.value:
+        solver_a_provider = provider_plan.synthesis
+        solver_b_provider = provider_plan.verification if provider_plan.verification != solver_a_provider else provider_plan.planning
+        dual_start = datetime.now(timezone.utc)
+
+        solver_a_prompt = (
+            "Produce a best-supported answer from evidence. "
+            "Use explicit claims and caveats.\n\n"
+            f"{synthesis_prompt}"
+        )
+        solver_b_prompt = (
+            "Act as a skeptical reviewer. Try to falsify weak claims and propose a conservative answer.\n\n"
+            f"{synthesis_prompt}"
+        )
+
+        solver_a = generate_text(solver_a_provider, solver_a_prompt, max_tokens=synthesis_token_budget)
+        solver_b = generate_text(solver_b_provider, solver_b_prompt, max_tokens=synthesis_token_budget)
+
+        draft_a = solver_a.text.strip() if solver_a.success and solver_a.text.strip() else ""
+        draft_b = solver_b.text.strip() if solver_b.success and solver_b.text.strip() else ""
+        if not draft_a:
+            synthesis_failures.append(f"{solver_a_provider}: {solver_a.error or 'empty output'}")
+            draft_a = _build_answer_text(question, claim_texts, unsupported_claims, claim_clusters, section_summaries)
+        if not draft_b:
+            synthesis_failures.append(f"{solver_b_provider}: {solver_b.error or 'empty output'}")
+            draft_b = _build_answer_text(question, claim_texts, unsupported_claims, claim_clusters, section_summaries)
+
+        _record_gen_usage(
+            solver_a_provider,
+            solver_a.model,
+            draft_a,
+            tokens_input=solver_a.tokens_input,
+            tokens_input_cached=solver_a.tokens_input_cached,
+            tokens_output=solver_a.tokens_output,
+        )
+        _record_gen_usage(
+            solver_b_provider,
+            solver_b.model,
+            draft_b,
+            tokens_input=solver_b.tokens_input,
+            tokens_input_cached=solver_b.tokens_input_cached,
+            tokens_output=solver_b.tokens_output,
+        )
+        stages.append(
+            TraceStage(
+                name="dual_solver",
+                status=Status.COMPLETED,
+                model=provider_plan.synthesis,
+                started_at=dual_start,
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "solver_a_provider": solver_a_provider,
+                    "solver_b_provider": solver_b_provider,
+                    "solver_a_success": solver_a.success,
+                    "solver_b_success": solver_b.success,
+                },
+            )
+        )
+
+        judge_start = datetime.now(timezone.utc)
+        judge_prompt = (
+            "You are an adjudicator. Compare Solver A and Solver B and output the most defensible final answer.\n"
+            "Return: winning_summary, unresolved_uncertainties, and key caveats.\n\n"
+            f"Question: {question}\n\n"
+            f"Solver A:\n{draft_a}\n\n"
+            f"Solver B:\n{draft_b}\n"
+        )
+        judge = generate_text(provider_plan.planning, judge_prompt, max_tokens=synthesis_token_budget)
+        judge_text = judge.text.strip() if judge.success and judge.text.strip() else ""
+        if not judge_text:
+            synthesis_failures.append(f"{provider_plan.planning}: {judge.error or 'empty output'}")
+            judge_text = draft_a if len(draft_a) >= len(draft_b) else draft_b
+        _record_gen_usage(
+            provider_plan.planning,
+            judge.model,
+            judge_text,
+            tokens_input=judge.tokens_input,
+            tokens_input_cached=judge.tokens_input_cached,
+            tokens_output=judge.tokens_output,
+        )
+        stages.append(
+            TraceStage(
+                name="debate_judge",
+                status=Status.COMPLETED,
+                model=provider_plan.planning,
+                started_at=judge_start,
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "judge_success": judge.success,
+                    "task_type": research_plan.task_type if research_plan else "factual",
+                },
+            )
+        )
+
+        finalized = _research_finalizer(question, judge_text, research_plan.task_type if research_plan else "factual")
+        stages.append(
+            TraceStage(
+                name="research_finalizer",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={"task_type": research_plan.task_type if research_plan else "factual"},
+            )
+        )
+        draft_texts = [finalized]
 
     ensemble_agreement = 1.0
     if mode == Mode.ENSEMBLE.value and not synthesis_failures:
@@ -546,7 +984,7 @@ def execute_orchestration(
             ):
                 synthesis_failures.append(f"budget guard: ensemble call skipped for {provider}")
                 continue
-            result = generate_text(provider, synthesis_prompt, max_tokens=700)
+            result = generate_text(provider, synthesis_prompt, max_tokens=synthesis_token_budget)
             if result.success and result.text.strip():
                 draft = result.text.strip()
             else:
@@ -616,6 +1054,91 @@ def execute_orchestration(
         )
     )
 
+    if effort.synthesis_revision_pass and draft_texts:
+        revision_start = datetime.now(timezone.utc)
+        if _question_has_answer_choices(question):
+            stages.append(
+                TraceStage(
+                    name="synthesis_revision",
+                    status=Status.COMPLETED,
+                    model=provider_plan.synthesis,
+                    started_at=revision_start,
+                    ended_at=datetime.now(timezone.utc),
+                    artifacts={"status": "skipped", "reason": "question_has_answer_choices"},
+                )
+            )
+        else:
+            anchors = _extract_lexical_anchors(question)
+            draft_coverage = _anchor_coverage(draft_texts[0], anchors)
+            anchors_block = ""
+            if anchors:
+                joined = ", ".join(anchors)
+                anchors_block = f"Preserve these exact technical strings when relevant: {joined}\n\n"
+            revision_prompt = (
+                "Revise the answer to improve evidence-grounding and caveats. "
+                "Keep it concise and do not introduce new claims beyond evidence bullets.\n"
+                f"{anchors_block}"
+                f"Question: {question}\n"
+                f"Draft answer:\n{draft_texts[0]}"
+            )
+            revision = generate_text(provider_plan.synthesis, revision_prompt, max_tokens=synthesis_token_budget)
+            if revision.success and revision.text.strip():
+                revised_text = revision.text.strip()
+                revised_coverage = _anchor_coverage(revised_text, anchors)
+                if revised_coverage + 1e-9 < draft_coverage:
+                    stages.append(
+                        TraceStage(
+                            name="synthesis_revision",
+                            status=Status.COMPLETED,
+                            model=provider_plan.synthesis,
+                            started_at=revision_start,
+                            ended_at=datetime.now(timezone.utc),
+                            artifacts={
+                                "status": "skipped",
+                                "reason": "lexical_anchor_regression",
+                                "anchor_count": len(anchors),
+                                "draft_anchor_coverage": draft_coverage,
+                                "revised_anchor_coverage": revised_coverage,
+                            },
+                        )
+                    )
+                else:
+                    draft_texts = [revised_text]
+                    _record_gen_usage(
+                        provider_plan.synthesis,
+                        revision.model,
+                        revised_text,
+                        tokens_input=revision.tokens_input,
+                        tokens_input_cached=revision.tokens_input_cached,
+                        tokens_output=revision.tokens_output,
+                    )
+                    stages.append(
+                        TraceStage(
+                            name="synthesis_revision",
+                            status=Status.COMPLETED,
+                            model=provider_plan.synthesis,
+                            started_at=revision_start,
+                            ended_at=datetime.now(timezone.utc),
+                            artifacts={
+                                "status": "applied",
+                                "anchor_count": len(anchors),
+                                "draft_anchor_coverage": draft_coverage,
+                                "revised_anchor_coverage": revised_coverage,
+                            },
+                        )
+                    )
+            else:
+                stages.append(
+                    TraceStage(
+                        name="synthesis_revision",
+                        status=Status.COMPLETED,
+                        model=provider_plan.synthesis,
+                        started_at=revision_start,
+                        ended_at=datetime.now(timezone.utc),
+                        artifacts={"status": "skipped", "reason": revision.error or "empty output"},
+                    )
+                )
+
     configured_count = sum(1 for status in provider_statuses if status.configured)
     features = CalibrationFeatures(
         support_coverage=len(citations) / max(1, len(base_claim_conf)),
@@ -623,7 +1146,7 @@ def execute_orchestration(
         contradiction_flags=verifier_result.contradiction_flags,
         provider_config_ratio=configured_count / max(1, len(provider_statuses)),
         ensemble_agreement=ensemble_agreement,
-        evidence_count=len(records),
+        evidence_count=len(selected_records),
     )
     answer_conf, calibrated_claims = calibrate_answer(features, adjusted_claim_conf)
     CalibrationStore().upsert_features(run_id=run_id, features=features_to_dict(features), answer_confidence=answer_conf)
@@ -645,6 +1168,16 @@ def execute_orchestration(
         uncertainty_reasons.append(budget_stop_reason)
     uncertainty_reasons.extend(verifier_result.notes)
 
+    abstain_reason_codes = _abstain_reasons(
+        min_sources=min_sources,
+        retrieved_count=len(selected_records),
+        support_coverage=features.support_coverage,
+        unsupported_claims=unsupported_claims,
+        contradiction_flags=verifier_result.contradiction_flags,
+        synthesis_failures=synthesis_failures,
+    )
+    should_abstain = len(abstain_reason_codes) >= 2
+
     final_text = (
         draft_texts[0]
         if draft_texts
@@ -658,6 +1191,40 @@ def execute_orchestration(
     )
     if mode == Mode.ENSEMBLE.value and draft_texts:
         final_text = max(draft_texts, key=len)
+    if should_abstain:
+        final_text = (
+            "Insufficient evidence quality to provide a reliable answer. "
+            "Retrieved evidence was sparse or weakly grounded for this question."
+        )
+        answer_conf = min(answer_conf, 0.2)
+        uncertainty_reasons.extend(f"abstain:{code}" for code in abstain_reason_codes)
+        stages.append(
+            TraceStage(
+                name="answerability_gate",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "abstained": True,
+                    "reasons": abstain_reason_codes,
+                    "support_coverage": features.support_coverage,
+                    "unsupported_claims": unsupported_claims,
+                    "contradiction_flags": verifier_result.contradiction_flags,
+                },
+            )
+        )
+    else:
+        stages.append(
+            TraceStage(
+                name="answerability_gate",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={"abstained": False, "reasons": []},
+            )
+        )
 
     answer = Answer(final_text=final_text, answer_confidence=answer_conf, claim_confidences=claim_confidences, uncertainty_reasons=uncertainty_reasons)
 

@@ -28,6 +28,9 @@ class VerificationResult:
 def _score_contradiction(record: LiteratureRecord) -> float:
     text = f"{record.title} {record.abstract or ''}".lower()
     marker_hits = sum(1 for marker in CONTRADICTION_MARKERS if marker in text)
+    if marker_hits == 0:
+        # Recency/abstract alone should not count as contradiction evidence.
+        return 0.0
     recency_boost = 0.2 if (record.year or 0) >= 2022 else 0.0
     abstract_boost = 0.1 if record.abstract else 0.0
     return marker_hits + recency_boost + abstract_boost
@@ -49,6 +52,7 @@ def run_verifier(
     window = max(1, depth) * max(1, top_k)
     selected = scored[:window]
     contradictions = len(selected)
+    contradiction_strength = sum(score for score, _ in selected)
 
     penalties: dict[str, float] = {}
     notes: list[str] = []
@@ -64,9 +68,9 @@ def run_verifier(
 
     if contradictions > 0:
         notes.append(
-            f"Potential contradictory evidence found (depth={depth}, screened={len(adversarial_records)}, selected={contradictions})"
+            f"Potential contradictory evidence found (depth={depth}, screened={len(adversarial_records)}, selected={contradictions}, strength={contradiction_strength:.2f})"
         )
-        penalty = min(0.35, 0.03 * contradictions)
+        penalty = min(0.35, 0.02 * contradiction_strength)
         for claim_id in claim_ids:
             penalties[claim_id] = penalty
 

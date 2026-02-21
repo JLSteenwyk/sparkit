@@ -71,7 +71,7 @@ def main() -> None:
                     providers=cfg.providers,
                     max_questions=None,
                     min_sources=None,
-                    max_latency_s=120,
+                    max_latency_s=None,
                     max_cost_usd=3.0,
                     parallel_workers=max(1, args.parallel_workers),
                 )

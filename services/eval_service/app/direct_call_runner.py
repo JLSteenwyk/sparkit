@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
-from services.orchestrator.app.policy import estimate_generation_cost
+from services.orchestrator.app.policy import estimate_generation_cost, has_exact_pricing
 from services.orchestrator.app.providers import generate_text
 
 from .evaluator import evaluate, load_questions
@@ -48,12 +50,71 @@ def _parse_direct_response(text: str) -> tuple[str, float]:
     return text.strip(), 0.5
 
 
+def _retry_attempts() -> int:
+    raw = os.getenv("DIRECT_CALL_MAX_ATTEMPTS", "3")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 3
+
+
+def _retry_backoff_s() -> float:
+    raw = os.getenv("DIRECT_CALL_RETRY_BACKOFF_S", "0.8")
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.8
+
+
+def _should_retry(provider: str, error: str | None) -> bool:
+    if not error:
+        return False
+    lowered = error.lower()
+    if "timed out" in lowered or "timeout" in lowered:
+        return True
+    if provider.lower() == "deepseek" and "empty_content with reasoning_content" in lowered:
+        return True
+    if "too many requests" in lowered or "rate limit" in lowered:
+        return True
+    return False
+
+
+def _direct_prompt_retry_variant(provider: str, prompt: str, attempt: int, error: str | None) -> str:
+    if provider.lower() == "deepseek" and error and "reasoning_content" in error.lower() and attempt > 1:
+        return (
+            f"{prompt}\n\n"
+            "IMPORTANT: Provide final answer content in message.content only. "
+            "Do not leave content empty. Return strict JSON only."
+        )
+    return prompt
+
+
+def _generate_with_retries(provider: str, prompt: str, max_tokens: int) -> Any:
+    attempts = _retry_attempts()
+    backoff = _retry_backoff_s()
+    last = None
+    for attempt in range(1, attempts + 1):
+        retry_prompt = _direct_prompt_retry_variant(provider, prompt, attempt, getattr(last, "error", None))
+        result = generate_text(provider, retry_prompt, max_tokens=max_tokens)
+        last = result
+        if result.success:
+            return result
+        if attempt >= attempts or not _should_retry(provider, result.error):
+            return result
+        sleep_s = backoff * (2 ** (attempt - 1))
+        if sleep_s > 0:
+            time.sleep(sleep_s)
+    return last
+
+
 def _summarize_usage(usage_rows: list[dict[str, float | int]]) -> dict[str, float | int]:
     count = max(1, len(usage_rows))
     total_cost = sum(float(row.get("cost_usd", 0.0)) for row in usage_rows)
     total_latency = sum(float(row.get("latency_s", 0.0)) for row in usage_rows)
     total_input = sum(int(row.get("tokens_input", 0)) for row in usage_rows)
     total_output = sum(int(row.get("tokens_output", 0)) for row in usage_rows)
+    exact_count = sum(1 for row in usage_rows if bool(row.get("cost_exact", False)))
+    estimated_count = max(0, len(usage_rows) - exact_count)
     return {
         "num_runs": len(usage_rows),
         "total_cost_usd": total_cost,
@@ -64,11 +125,14 @@ def _summarize_usage(usage_rows: list[dict[str, float | int]]) -> dict[str, floa
         "avg_tokens_input": total_input / count,
         "total_tokens_output": total_output,
         "avg_tokens_output": total_output / count,
-        "cost_estimated": True,
+        "cost_estimated": estimated_count > 0 or len(usage_rows) == 0,
+        "cost_exact_runs": exact_count,
+        "cost_estimated_runs": estimated_count,
         "token_usage_partial": True,
         "token_usage_notes": (
             "Direct-call baseline uses provider token usage where available. "
-            "Cost estimates are exact only for priced models configured in policy pricing map."
+            "Cost estimates are exact only for models present in pricing config "
+            "(defaults + SPARKIT_MODEL_PRICING_JSON)."
         ),
     }
 
@@ -89,7 +153,7 @@ def run_direct_single_call_benchmark_with_predictions(
 
     for question in questions:
         prompt = _build_direct_prompt(question.question)
-        result = generate_text(provider, prompt, max_tokens=max_tokens)
+        result = _generate_with_retries(provider, prompt, max_tokens=max_tokens)
 
         if result.success:
             answer_text, answer_conf = _parse_direct_response(result.text)
@@ -123,6 +187,7 @@ def run_direct_single_call_benchmark_with_predictions(
 
         usage_rows.append(
             {
+                "cost_exact": bool(has_exact_pricing(provider=provider, model=result.model)),
                 "cost_usd": float(
                     estimate_generation_cost(
                         provider=provider,
@@ -132,7 +197,7 @@ def run_direct_single_call_benchmark_with_predictions(
                         tokens_output=result.tokens_output,
                     )
                 ),
-                "latency_s": 0.0,
+                "latency_s": float(result.latency_s),
                 "tokens_input": int(result.tokens_input),
                 "tokens_output": int(result.tokens_output),
             }

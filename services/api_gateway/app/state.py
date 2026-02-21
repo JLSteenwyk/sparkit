@@ -248,6 +248,7 @@ class RunStore:
                 mode=run.mode.value,
                 max_latency_s=run.constraints.max_latency_s,
                 max_cost_usd=run.constraints.max_cost_usd,
+                synthesis_max_tokens=run.constraints.synthesis_max_tokens,
                 prompt_version=run.prompt_version,
                 config_version=run.config_version,
                 reproducibility=run.reproducibility,

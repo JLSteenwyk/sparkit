@@ -17,8 +17,13 @@ def test_generate_stem_exam_200_question_count_and_ids() -> None:
 
 
 def test_parse_baseline_configs_subset() -> None:
-    configs = parse_configs("single_openai,routed_frontier")
-    assert [config.name for config in configs] == ["single_openai", "routed_frontier"]
+    configs = parse_configs("single_openai,single_openai_pro,single_anthropic_sonnet,routed_frontier")
+    assert [config.name for config in configs] == [
+        "single_openai",
+        "single_openai_pro",
+        "single_anthropic_sonnet",
+        "routed_frontier",
+    ]
 
 
 def test_parse_baseline_configs_invalid_name_raises() -> None:
@@ -30,3 +35,10 @@ def test_required_key_vars_for_gemini_provider() -> None:
     vars_needed = config_required_vars(["gemini"])
     assert "GEMINI_API_KEY" in vars_needed
     assert "GOOGLE_API_KEY" in vars_needed
+
+
+def test_required_key_vars_for_new_providers() -> None:
+    vars_needed = config_required_vars(["deepseek", "grok", "mistral"])
+    assert "DEEPSEEK_API_KEY" in vars_needed
+    assert "GROK_API_KEY" in vars_needed
+    assert "MISTRAL_API_KEY" in vars_needed

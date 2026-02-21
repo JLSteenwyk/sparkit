@@ -1,6 +1,6 @@
 # Schemas (V1)
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 
 ## Design goals
 - Stable IDs for reproducibility and trace joins.
@@ -16,9 +16,10 @@ Last updated: 2026-02-19
   "status": "running",
   "answer_style": "technical",
   "constraints": {
-    "max_latency_s": 120,
+    "max_latency_s": null,
     "max_cost_usd": 3.0,
-    "min_sources": 5
+    "min_sources": 5,
+    "synthesis_max_tokens": 900
   },
   "prompt_version": "synthesis_v1.2",
   "config_version": "orchestration_v1.2",

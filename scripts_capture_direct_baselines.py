@@ -14,6 +14,9 @@ KEY_VARS = {
     "anthropic": ["ANTHROPIC_API_KEY"],
     "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     "kimi": ["KIMI_API_KEY"],
+    "deepseek": ["DEEPSEEK_API_KEY"],
+    "grok": ["GROK_API_KEY"],
+    "mistral": ["MISTRAL_API_KEY"],
 }
 
 
@@ -30,6 +33,9 @@ def _key_status() -> dict[str, bool]:
         "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
         "ANTHROPIC_API_KEY": bool(os.getenv("ANTHROPIC_API_KEY")),
         "KIMI_API_KEY": bool(os.getenv("KIMI_API_KEY")),
+        "DEEPSEEK_API_KEY": bool(os.getenv("DEEPSEEK_API_KEY")),
+        "GROK_API_KEY": bool(os.getenv("GROK_API_KEY")),
+        "MISTRAL_API_KEY": bool(os.getenv("MISTRAL_API_KEY")),
         "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY")),
         "GOOGLE_API_KEY": bool(os.getenv("GOOGLE_API_KEY")),
     }
@@ -40,7 +46,7 @@ def main() -> None:
     parser.add_argument("--questions", required=True)
     parser.add_argument("--output-dir", default="benchmarks/results")
     parser.add_argument("--label", default="direct_calls")
-    parser.add_argument("--providers", default="openai,anthropic,gemini,kimi")
+    parser.add_argument("--providers", default="openai,anthropic,gemini,kimi,deepseek,grok,mistral")
     parser.add_argument("--max-questions", type=int, default=0)
     parser.add_argument("--max-tokens", type=int, default=700)
     parser.add_argument("--skip-missing-keys", action="store_true")
@@ -98,6 +104,7 @@ def main() -> None:
                 "total_tokens_input": result.get("usage_summary", {}).get("total_tokens_input", 0),
                 "total_tokens_output": result.get("usage_summary", {}).get("total_tokens_output", 0),
                 "failure_count": len(result.get("failures", [])),
+                "failed_question_ids": [item.get("id") for item in result.get("failures", []) if item.get("id")],
             }
         )
         cast = manifest["providers"]
@@ -110,4 +117,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

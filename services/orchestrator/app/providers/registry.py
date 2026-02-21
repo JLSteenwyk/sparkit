@@ -47,6 +47,9 @@ def build_default_registry() -> ProviderRegistry:
             "openai": ["OPENAI_API_KEY"],
             "anthropic": ["ANTHROPIC_API_KEY"],
             "kimi": ["KIMI_API_KEY"],
+            "deepseek": ["DEEPSEEK_API_KEY"],
+            "grok": ["GROK_API_KEY"],
+            "mistral": ["MISTRAL_API_KEY"],
             "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
             "google": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
         }

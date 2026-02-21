@@ -30,3 +30,20 @@ def test_verifier_flags_contradictions_and_ranks() -> None:
     assert "clm_1" in result.penalties
     assert result.notes
     assert len(result.ranked_contradictions) >= 1
+
+
+def test_verifier_ignores_records_without_contradiction_markers() -> None:
+    records = [
+        LiteratureRecord(
+            source="arxiv",
+            title="Recent benchmark study",
+            abstract="Compares methods and reports improvements.",
+            authors=["A"],
+            year=2025,
+            doi="10.1/z",
+            url="https://example.org/3",
+        )
+    ]
+    result = run_verifier(claim_ids=["clm_1"], adversarial_records=records, depth=2, top_k=2)
+    assert result.contradiction_flags == 0
+    assert "clm_1" not in result.penalties

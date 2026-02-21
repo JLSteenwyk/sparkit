@@ -1,6 +1,6 @@
 # API Contracts (V1)
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 
 ## Principles
 - Every run is traceable and reproducible.
@@ -19,9 +19,10 @@ Request:
   "mode": "single",
   "providers": ["openai"],
   "constraints": {
-    "max_latency_s": 120,
+    "max_latency_s": null,
     "max_cost_usd": 3.0,
-    "min_sources": 5
+    "min_sources": 5,
+    "synthesis_max_tokens": 900
   },
   "answer_style": "technical",
   "include_trace": false,
@@ -35,10 +36,11 @@ Request:
 Validation:
 - `question` required, non-empty string.
 - `mode` required: `single | routed | ensemble`.
-- `providers` optional in routed mode, required in single mode.
-- `constraints.max_latency_s` range: `10..600`.
+- `providers` optional in routed/ensemble modes, required in `single` mode.
+- `constraints.max_latency_s` optional; when provided range is `10..7200`.
 - `constraints.max_cost_usd` range: `0.05..100.0`.
 - `constraints.min_sources` range: `1..50`.
+- `constraints.synthesis_max_tokens` optional; when provided range is `128..4096`.
 - `answer_style`: `exam | technical | concise`.
 
 Response (`202 Accepted`):
@@ -207,4 +209,5 @@ Errors:
 - Trace may redact provider prompts by policy, but should preserve structural artifacts.
 - For insufficient evidence outcomes, `status` remains `completed` and answer includes explicit limitation section.
 - `POST /v1/ask` now records reproducibility metadata (prompt/config versions and stable fingerprint) in run storage and trace planning artifacts.
+- When `constraints.max_latency_s` is omitted (`null`), no latency cap is enforced by default.
 - Synthesis trace artifacts include `claim_clusters` and `section_summaries`.

@@ -1,20 +1,17 @@
 # Backlog
 
-Last updated: 2026-02-20
+Last updated: 2026-02-21
 
 ## Priority 0 (next)
-1. Cost-accurate accounting + latency instrumentation.
-Impact: High. Effort: Low-Medium.
-Deliverable: exact per-provider/model pricing map and stage-level token accounting so every run (SPARKIT + direct baselines) reports accurate total/avg cost with clear confidence flags when fallback estimates are used.
-2. Fix direct single-call latency reporting.
-Impact: High. Effort: Low.
-Deliverable: capture real per-call latency in `scripts_capture_direct_baselines.py`/`direct_call_runner` instead of `0.0` so SPARKIT vs direct time comparisons are valid.
-3. Answerability gating.
+1. Execute HLE-gold triplicate runs (SPARKIT + direct baselines) and publish consolidated results.
+Impact: High. Effort: Medium.
+Deliverable: 3x replicated manifests with aggregate quality/calibration/cost/latency comparison.
+2. Answerability gating.
 Impact: High. Effort: Low-Medium.
 Deliverable: policy gate that returns structured insufficient-evidence outcomes when retrieval/verifier quality is below threshold.
-4. Complete HLE149 routed run and publish SPARKIT vs direct comparison table.
+3. Complete HLE149 final comparison table.
 Impact: High. Effort: Low.
-Deliverable: final HLE149 comparison across `single_openai`, `single_anthropic`, `routed_frontier`, and direct baselines.
+Deliverable: final HLE149 comparison across all active `single_*`, `routed_frontier`, `routed_frontier_plus`, and direct baselines.
 
 ## Priority 1
 1. Evidence scoring/filtering before synthesis.
@@ -82,3 +79,6 @@ Deliverable: notification hooks for drift or benchmark regression failures.
 26. Expand benchmark set to STEM-Exam-200 and add baseline capture workflow.
 27. Improve answer synthesis quality with claim clustering and section-aware summarization.
 28. Add drift checker + thresholds config + scheduled CI sample drift gate.
+29. Cost-accurate accounting + latency instrumentation.
+30. Direct single-call latency reporting fix.
+31. Direct-call reliability hardening for DeepSeek/Grok (retry/backoff + timeout controls + DeepSeek reasoning-content fallback).

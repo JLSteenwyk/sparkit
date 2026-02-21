@@ -18,7 +18,7 @@ def main() -> None:
     )
     parser.add_argument("--max-questions", type=int, default=0)
     parser.add_argument("--min-sources", type=int, default=0)
-    parser.add_argument("--max-latency-s", type=int, default=120)
+    parser.add_argument("--max-latency-s", type=int, default=0)
     parser.add_argument("--max-cost-usd", type=float, default=3.0)
     parser.add_argument("--parallel-workers", type=int, default=1, help="Parallel question workers per config.")
     parser.add_argument("--parallel-configs", type=int, default=1, help="Parallel configs in baseline capture.")
@@ -32,6 +32,7 @@ def main() -> None:
     configs = parse_configs(args.configs)
     max_questions = args.max_questions if args.max_questions > 0 else None
     min_sources = args.min_sources if args.min_sources > 0 else None
+    max_latency_s = args.max_latency_s if args.max_latency_s > 0 else None
 
     manifest = capture_baselines(
         questions_path=args.questions,
@@ -41,7 +42,7 @@ def main() -> None:
         max_questions=max_questions,
         skip_missing_keys=args.skip_missing_keys,
         min_sources=min_sources,
-        max_latency_s=args.max_latency_s,
+        max_latency_s=max_latency_s,
         max_cost_usd=args.max_cost_usd,
         parallel_workers=max(1, args.parallel_workers),
         parallel_configs=max(1, args.parallel_configs),

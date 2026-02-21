@@ -41,15 +41,15 @@ def build_provider_plan(mode: str, statuses: list[ProviderStatus], requested: li
 
     if mode == "routed":
         return ProviderPlan(
-            planning=_pick(["anthropic", "openai", "gemini", "kimi"], configured, "anthropic"),
-            retrieval=_pick(["openai", "gemini", "anthropic", "kimi"], configured, "openai"),
-            synthesis=_pick(["anthropic", "openai", "gemini", "kimi"], configured, "anthropic"),
-            verification=_pick(["gemini", "openai", "anthropic", "kimi"], configured, "gemini"),
+            planning=_pick(["anthropic", "openai", "gemini", "mistral", "deepseek", "grok", "kimi"], configured, "anthropic"),
+            retrieval=_pick(["openai", "gemini", "deepseek", "mistral", "anthropic", "grok", "kimi"], configured, "openai"),
+            synthesis=_pick(["anthropic", "openai", "mistral", "gemini", "deepseek", "grok", "kimi"], configured, "anthropic"),
+            verification=_pick(["gemini", "openai", "anthropic", "mistral", "deepseek", "grok", "kimi"], configured, "gemini"),
             ensemble=configured[:3] if configured else requested_non_empty[:1],
         )
 
     # ensemble mode
-    preferred = ["openai", "anthropic", "gemini", "kimi"]
+    preferred = ["openai", "anthropic", "gemini", "mistral", "deepseek", "grok", "kimi"]
     ensemble = [provider for provider in preferred if provider in configured]
     if not ensemble:
         ensemble = requested_non_empty[:3]

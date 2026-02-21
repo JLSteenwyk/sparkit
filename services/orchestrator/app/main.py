@@ -11,6 +11,7 @@ class OrchestrateRequest(BaseModel):
     min_sources: int = Field(default=5, ge=1, le=50)
     providers: list[str] | None = None
     mode: str = "single"
+    synthesis_max_tokens: int | None = Field(default=None, ge=128, le=4096)
 
 
 @app.get("/health")
@@ -26,6 +27,7 @@ def orchestrate(request: OrchestrateRequest):
         min_sources=request.min_sources,
         providers=request.providers,
         mode=request.mode,
+        synthesis_max_tokens=request.synthesis_max_tokens,
     )
     return {
         "answer": result.answer,

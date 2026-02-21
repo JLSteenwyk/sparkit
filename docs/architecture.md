@@ -42,21 +42,26 @@ Build a STEM-focused literature agent that answers complex questions through mul
    - broad
    - gap-fill
    - adversarial
+   - optional method/systematic rounds can be added in future deep modes
 3. Ingest and parse evidence documents.
+   - includes relevance reranking + source-diverse record selection before ingestion
 4. Build claim/evidence graph and citation links.
 5. Run verifier pass with depth-aware contradiction reranking.
 6. Calibrate answer and claim confidences from quality features.
 7. Run provider synthesis:
    - single/routed: one synthesis provider
    - ensemble: multiple provider drafts + adjudication
+   - synthesis token budget can be overridden per run via `constraints.synthesis_max_tokens`
    - prompt includes claim clusters + section-aware evidence summaries
 8. Enforce budget guardrails during retrieval/synthesis.
-9. Persist run observability metrics.
-10. Return final answer, citations, quality gates, and trace artifacts.
+9. Run answerability gate:
+   - abstains with explicit insufficient-evidence response when evidence quality is below threshold
+10. Persist run observability metrics.
+11. Return final answer, citations, quality gates, and trace artifacts.
     - synthesis artifacts include `claim_clusters` and `section_summaries`
-11. Evaluate outputs via benchmark harness (rubric + ECE/Brier).
-12. Persist reproducibility metadata (prompt/config versions + stable fingerprint) with each run.
-13. Capture baseline manifests and per-run predictions for configured provider modes.
+12. Evaluate outputs via benchmark harness (rubric + ECE/Brier).
+13. Persist reproducibility metadata (prompt/config versions + stable fingerprint) with each run.
+14. Capture baseline manifests and per-run predictions for configured provider modes.
 
 Note:
 - Benchmark default presets currently use `single_*` and `routed_frontier`; `ensemble_frontier` is deprecated from standard benchmark workflows.

@@ -58,7 +58,7 @@ baseline-capture-quick:
 	$(PY) scripts_capture_baselines.py --questions benchmarks/stem_exam_200/questions.json --label quick --max-questions 1 --configs single_openai,routed_frontier --min-sources 1 --max-latency-s 45 --max-cost-usd 0.8
 
 baseline-capture-hle-biochem-20:
-	$(PY) scripts_capture_baselines.py --questions benchmarks/hle_gold_bio_chem/questions_bio10_chem10.json --label hle_bio_chem_20 --configs single_openai,single_anthropic,single_gemini,single_kimi,routed_frontier --min-sources 1 --max-latency-s 90 --max-cost-usd 2.0 --skip-missing-keys
+	$(PY) scripts_capture_baselines.py --questions benchmarks/hle_gold_bio_chem/questions_bio10_chem10.json --label hle_bio_chem_20 --configs single_openai,single_openai_pro,single_anthropic,single_anthropic_sonnet,single_gemini,single_kimi,routed_frontier --min-sources 1 --max-latency-s 90 --max-cost-usd 2.0 --skip-missing-keys
 
 baseline-capture-direct-calls-hle20:
 	$(PY) scripts_capture_direct_baselines.py --questions benchmarks/hle_gold_bio_chem/questions_bio10_chem10.json --label hle_bio_chem_20_direct --providers openai,anthropic,gemini,kimi --skip-missing-keys
