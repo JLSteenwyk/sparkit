@@ -16,6 +16,7 @@ Last updated: 2026-02-20
 - `docs/api-contracts.md`: Gateway API contract and response shapes.
 - `docs/schemas.md`: Domain schema references and persistence expectations.
 - `docs/progress.md`: Current status, milestones, blockers, and recent updates.
+- `docs/hle-gold-live-status.md`: Live HLE-gold benchmark table (running + completed configs/models).
 - `docs/backlog.md`: Prioritized implementation tasks.
 - `docs/decisions.md`: Decision log with rationale and consequences.
 - `docs/drift-policy.md`: Drift thresholds, alerting rules, and triage workflow.
@@ -30,5 +31,6 @@ Last updated: 2026-02-20
 
 ## Current emphasis
 - HLE149 benchmark tracking (SPARKIT vs direct single-call).
+- Live HLE-gold run status table with model-level metrics.
 - Cost-accounting accuracy and token-usage transparency.
 - Provider-specific response handling robustness (especially Kimi).

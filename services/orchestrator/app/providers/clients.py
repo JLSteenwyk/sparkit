@@ -27,7 +27,7 @@ class GenerationResult:
 class BaseProviderClient:
     provider: str
 
-    def generate(self, prompt: str, max_tokens: int = 800, timeout_s: float = 25.0) -> GenerationResult:
+    def generate(self, prompt: str, max_tokens: int | None = None, timeout_s: float = 25.0) -> GenerationResult:
         raise NotImplementedError
 
 
@@ -68,15 +68,16 @@ class OpenAICompatibleClient(BaseProviderClient):
         if not self.api_key:
             raise ProviderClientError(f"{self.api_key_env_name} is not set")
 
-    def generate(self, prompt: str, max_tokens: int = 800, timeout_s: float = 25.0) -> GenerationResult:
+    def generate(self, prompt: str, max_tokens: int | None = None, timeout_s: float = 25.0) -> GenerationResult:
         url = f"{self.base_url}/v1/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}"}
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
             "temperature": self.temperature,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         started = perf_counter()
         try:
             with httpx.Client(timeout=timeout_s) as client:
@@ -130,48 +131,84 @@ class OpenAIClient(BaseProviderClient):
         if not self.api_key:
             raise ProviderClientError("OPENAI_API_KEY is not set")
 
-    def generate(self, prompt: str, max_tokens: int = 800, timeout_s: float = 25.0) -> GenerationResult:
-        url = "https://api.openai.com/v1/chat/completions"
+    def generate(self, prompt: str, max_tokens: int | None = None, timeout_s: float = 25.0) -> GenerationResult:
+        chat_url = "https://api.openai.com/v1/chat/completions"
+        responses_url = "https://api.openai.com/v1/responses"
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        payload: dict[str, object] = {
+        chat_payload: dict[str, object] = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
         }
         # GPT-5-family chat completions expect max_completion_tokens.
-        if self.model.startswith("gpt-5"):
-            payload["max_completion_tokens"] = max_tokens
-        else:
-            payload["max_tokens"] = max_tokens
+        if max_tokens is not None:
+            if self.model.startswith("gpt-5"):
+                chat_payload["max_completion_tokens"] = max_tokens
+            else:
+                chat_payload["max_tokens"] = max_tokens
         started = perf_counter()
         try:
             with httpx.Client(timeout=timeout_s) as client:
-                response = client.post(url, headers=headers, json=payload)
+                response = client.post(chat_url, headers=headers, json=chat_payload)
+                if response.status_code == 404 and self.model.startswith("gpt-5"):
+                    # Some GPT-5 variants are served on /v1/responses only.
+                    responses_payload: dict[str, object] = {
+                        "model": self.model,
+                        "input": prompt,
+                    }
+                    if max_tokens is not None:
+                        responses_payload["max_output_tokens"] = max_tokens
+                    response = client.post(responses_url, headers=headers, json=responses_payload)
                 response.raise_for_status()
+
             data = response.json()
-            message = (data.get("choices") or [{}])[0].get("message") or {}
-            text = str(message.get("content", "") or "")
-            if not text.strip():
-                reasoning = str(message.get("reasoning_content", "") or "")
-                if reasoning.strip():
-                    text = reasoning
-                else:
-                    return GenerationResult(
-                        provider=self.provider,
-                        model=self.model,
-                        text="",
-                        success=False,
-                        error="empty_content",
-                    )
+            text = ""
             usage = data.get("usage", {}) or {}
+
+            # Chat Completions format.
+            if "choices" in data:
+                message = (data.get("choices") or [{}])[0].get("message") or {}
+                text = str(message.get("content", "") or "")
+                if not text.strip():
+                    reasoning = str(message.get("reasoning_content", "") or "")
+                    if reasoning.strip():
+                        text = reasoning
+                tokens_input = int(usage.get("prompt_tokens", 0) or 0)
+                tokens_input_cached = int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)) or 0)
+                tokens_output = int(usage.get("completion_tokens", 0) or 0)
+            else:
+                # Responses format.
+                text = str(data.get("output_text", "") or "")
+                if not text.strip():
+                    output = data.get("output", []) or []
+                    for item in output:
+                        if item.get("type") != "message":
+                            continue
+                        for content in item.get("content", []) or []:
+                            if content.get("type") == "output_text":
+                                text += str(content.get("text", "") or "")
+                tokens_input = int(usage.get("input_tokens", 0) or 0)
+                tokens_input_cached = int(((usage.get("input_tokens_details") or {}).get("cached_tokens", 0)) or 0)
+                tokens_output = int(usage.get("output_tokens", 0) or 0)
+
+            if not text.strip():
+                return GenerationResult(
+                    provider=self.provider,
+                    model=self.model,
+                    text="",
+                    success=False,
+                    latency_s=max(0.0, perf_counter() - started),
+                    error="empty_content",
+                )
+
             return GenerationResult(
                 provider=self.provider,
                 model=self.model,
                 text=text,
                 success=True,
-                tokens_input=int(usage.get("prompt_tokens", 0) or 0),
-                tokens_input_cached=int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)) or 0),
-                tokens_output=int(usage.get("completion_tokens", 0) or 0),
+                tokens_input=tokens_input,
+                tokens_input_cached=tokens_input_cached,
+                tokens_output=tokens_output,
                 latency_s=max(0.0, perf_counter() - started),
             )
         except Exception as exc:  # noqa: BLE001
@@ -194,7 +231,7 @@ class AnthropicClient(BaseProviderClient):
         if not self.api_key:
             raise ProviderClientError("ANTHROPIC_API_KEY is not set")
 
-    def generate(self, prompt: str, max_tokens: int = 800, timeout_s: float = 25.0) -> GenerationResult:
+    def generate(self, prompt: str, max_tokens: int | None = None, timeout_s: float = 25.0) -> GenerationResult:
         url = "https://api.anthropic.com/v1/messages"
         headers = {
             "x-api-key": self.api_key,
@@ -203,10 +240,11 @@ class AnthropicClient(BaseProviderClient):
         }
         payload = {
             "model": self.model,
-            "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         started = perf_counter()
         try:
             with httpx.Client(timeout=timeout_s) as client:
@@ -260,15 +298,16 @@ class KimiClient(BaseProviderClient):
         if not self.api_key:
             raise ProviderClientError("KIMI_API_KEY is not set")
 
-    def generate(self, prompt: str, max_tokens: int = 800, timeout_s: float = 25.0) -> GenerationResult:
+    def generate(self, prompt: str, max_tokens: int | None = None, timeout_s: float = 25.0) -> GenerationResult:
         url = f"{self.base_url}/v1/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}"}
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
             "temperature": self.temperature,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         started = perf_counter()
         try:
             with httpx.Client(timeout=timeout_s) as client:
@@ -321,14 +360,17 @@ class GeminiClient(BaseProviderClient):
         if not self.api_key:
             raise ProviderClientError("GEMINI_API_KEY or GOOGLE_API_KEY is not set")
 
-    def generate(self, prompt: str, max_tokens: int = 800, timeout_s: float = 25.0) -> GenerationResult:
+    def generate(self, prompt: str, max_tokens: int | None = None, timeout_s: float = 25.0) -> GenerationResult:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self.model}:generateContent?key={self.api_key}"
         )
+        generation_config: dict[str, object] = {"temperature": 0.2}
+        if max_tokens is not None:
+            generation_config["maxOutputTokens"] = max_tokens
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens},
+            "generationConfig": generation_config,
         }
         started = perf_counter()
         try:
@@ -402,7 +444,9 @@ def make_provider_client(provider: str) -> BaseProviderClient:
     raise ProviderClientError(f"Unsupported provider: {provider}")
 
 
-def generate_text(provider: str, prompt: str, max_tokens: int = 800, timeout_s: float | None = None) -> GenerationResult:
+def generate_text(
+    provider: str, prompt: str, max_tokens: int | None = None, timeout_s: float | None = None
+) -> GenerationResult:
     try:
         client = make_provider_client(provider)
     except Exception as exc:  # noqa: BLE001

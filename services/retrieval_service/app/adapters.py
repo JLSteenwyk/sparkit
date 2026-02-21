@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 import xml.etree.ElementTree as ET
+import os
+from urllib.parse import urlparse
 from typing import Any
 
 import httpx
@@ -11,6 +13,26 @@ from .models import LiteratureRecord
 ARXIV_API_URL = "http://export.arxiv.org/api/query"
 CROSSREF_API_URL = "https://api.crossref.org/works"
 SEMANTIC_SCHOLAR_API_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+OPENALEX_API_URL = "https://api.openalex.org/works"
+EUROPE_PMC_API_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+BRAVE_SEARCH_API_URL = "https://api.search.brave.com/res/v1/web/search"
+
+_SCIENCE_HOST_KEYWORDS = (
+    "nature.com",
+    "science.org",
+    "cell.com",
+    "thelancet.com",
+    "bmj.com",
+    "nejm.org",
+    "pubmed.ncbi.nlm.nih.gov",
+    "sciencedirect.com",
+    "springer.com",
+    "wiley.com",
+    "acs.org",
+    "rsc.org",
+    "ieee.org",
+    ".edu",
+)
 
 
 def _first(items: list[Any], default: Any = None) -> Any:
@@ -169,4 +191,147 @@ def search_semantic_scholar(
                 url=url,
             )
         )
+    return records
+
+
+def search_openalex(query: str, limit: int = 5, timeout_s: float = 15.0) -> list[LiteratureRecord]:
+    params = {
+        "search": query,
+        "per-page": max(1, min(limit, 25)),
+    }
+    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+        response = _get_with_retry(client, OPENALEX_API_URL, params=params)
+
+    items = response.json().get("results", [])
+    records: list[LiteratureRecord] = []
+    for item in items:
+        title = (item.get("title") or "").strip()
+        doi_raw = item.get("doi")
+        doi = None
+        if isinstance(doi_raw, str) and doi_raw:
+            doi = doi_raw.rsplit("doi.org/", 1)[-1]
+        url = item.get("primary_location", {}).get("landing_page_url") or item.get("id")
+        year = item.get("publication_year")
+        if not title or not url:
+            continue
+        authors = []
+        for auth in item.get("authorships", []) or []:
+            name = (auth.get("author") or {}).get("display_name")
+            if isinstance(name, str) and name.strip():
+                authors.append(name.strip())
+        abstract = item.get("abstract")
+        if abstract is None and isinstance(item.get("abstract_inverted_index"), dict):
+            # OpenAlex may return abstract as inverted index.
+            inv = item["abstract_inverted_index"]
+            words: dict[int, str] = {}
+            for token, positions in inv.items():
+                for pos in positions:
+                    if isinstance(pos, int):
+                        words[pos] = token
+            if words:
+                abstract = " ".join(words[idx] for idx in sorted(words.keys()))
+        records.append(
+            LiteratureRecord(
+                source="openalex",
+                title=title,
+                abstract=abstract if isinstance(abstract, str) else None,
+                authors=authors,
+                year=year if isinstance(year, int) else None,
+                doi=doi,
+                url=url,
+            )
+        )
+    return records
+
+
+def search_europe_pmc(query: str, limit: int = 5, timeout_s: float = 15.0) -> list[LiteratureRecord]:
+    params = {
+        "query": query,
+        "format": "json",
+        "pageSize": max(1, min(limit, 25)),
+        "resultType": "core",
+    }
+    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+        response = _get_with_retry(client, EUROPE_PMC_API_URL, params=params)
+
+    items = response.json().get("resultList", {}).get("result", [])
+    records: list[LiteratureRecord] = []
+    for item in items:
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+        doi = item.get("doi")
+        pmid = item.get("pmid")
+        pmcid = item.get("pmcid")
+        url = item.get("fullTextUrl")
+        if not url:
+            if pmcid:
+                url = f"https://europepmc.org/article/PMC/{pmcid}"
+            elif pmid:
+                url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+            elif doi:
+                url = f"https://doi.org/{doi}"
+        if not url:
+            continue
+        year = None
+        year_text = str(item.get("pubYear") or "")
+        if year_text.isdigit():
+            year = int(year_text)
+        authors = []
+        author_field = item.get("authorString")
+        if isinstance(author_field, str) and author_field.strip():
+            authors = [author.strip() for author in author_field.split(",") if author.strip()]
+        records.append(
+            LiteratureRecord(
+                source="europe_pmc",
+                title=title,
+                abstract=item.get("abstractText"),
+                authors=authors,
+                year=year,
+                doi=doi,
+                url=url,
+            )
+        )
+    return records
+
+
+def search_brave_web(query: str, limit: int = 5, timeout_s: float = 15.0) -> list[LiteratureRecord]:
+    api_key = os.getenv("BRAVE_SEARCH_API_KEY")
+    if not api_key:
+        return []
+    params = {
+        "q": query,
+        "count": max(1, min(limit * 2, 20)),
+    }
+    headers = {
+        "X-Subscription-Token": api_key,
+        "Accept": "application/json",
+        "User-Agent": "SPARKIT/0.1",
+    }
+    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+        response = _get_with_retry(client, BRAVE_SEARCH_API_URL, params=params, headers=headers)
+    results = response.json().get("web", {}).get("results", []) or []
+    records: list[LiteratureRecord] = []
+    for row in results:
+        url = row.get("url")
+        title = (row.get("title") or "").strip()
+        if not url or not title:
+            continue
+        host = urlparse(url).netloc.lower()
+        if not any(keyword in host for keyword in _SCIENCE_HOST_KEYWORDS):
+            continue
+        summary = (row.get("description") or "").strip() or None
+        records.append(
+            LiteratureRecord(
+                source="brave_web",
+                title=title,
+                abstract=summary,
+                authors=[],
+                year=None,
+                doi=None,
+                url=url,
+            )
+        )
+        if len(records) >= limit:
+            break
     return records

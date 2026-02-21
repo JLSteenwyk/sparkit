@@ -12,9 +12,11 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `GROK_API_KEY`
 - `MISTRAL_API_KEY`
 - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+- `BRAVE_SEARCH_API_KEY` (optional; only for Google-like web discovery when enabled)
 
 ## Database
 - `DATABASE_URL` (example: `postgresql://postgres:postgres@localhost:5432/sparkit`)
+  - also used by local corpus tables: `corpus_documents`, `corpus_chunks`
 
 ## Optional provider overrides
 - `KIMI_BASE_URL` (default: `https://api.moonshot.ai`)
@@ -33,9 +35,20 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `MISTRAL_BASE_URL` (default: `https://api.mistral.ai`)
 - `SPARKIT_PROVIDER_TIMEOUT_S` (default: `35`)
 - `<PROVIDER>_TIMEOUT_S` per-provider override (examples: `GROK_TIMEOUT_S`, `DEEPSEEK_TIMEOUT_S`)
+- `SPARKIT_INGESTION_MAX_CHARS` (default: `10000`, chars parsed per ingested document)
+- `SPARKIT_RETRIEVAL_EXTRA_RESULTS` (default: `8`, added to requested `min_sources` in standard mode)
+- `SPARKIT_RETRIEVAL_MIN_RESULTS_FLOOR` (default: `14`, minimum per-query retrieval target in standard mode)
+- `SPARKIT_INGESTION_EXTRA_DOCS` (default: `6`, added to requested `min_sources` for ingestion target in standard mode)
+- `SPARKIT_INGESTION_TARGET_DOCS_FLOOR` (default: `10`, minimum ingested-doc target in standard mode)
+- `SPARKIT_RETRIEVAL_EXTRA_RESULTS_RESEARCH_MAX` (default: `12`)
+- `SPARKIT_RETRIEVAL_MIN_RESULTS_FLOOR_RESEARCH_MAX` (default: `18`)
+- `SPARKIT_INGESTION_EXTRA_DOCS_RESEARCH_MAX` (default: `8`)
+- `SPARKIT_INGESTION_TARGET_DOCS_FLOOR_RESEARCH_MAX` (default: `14`)
 - `DIRECT_CALL_MAX_ATTEMPTS` (default: `3`, applies to direct single-call baselines)
 - `DIRECT_CALL_RETRY_BACKOFF_S` (default: `0.8`, exponential backoff base seconds)
 - `SPARKIT_MODEL_PRICING_JSON` (optional per-model pricing override map)
+- `SPARKIT_ENABLE_WEB_SEARCH` (default: `0`; set `1` to enable Brave web-search adapter in retrieval)
+- `SPARKIT_ENABLE_LIVE_RETRIEVAL` (default: `1`; set `0` to disable live network adapters and use local corpus retrieval only)
 
 ## Benchmark model presets
 - `single_openai`: provider `openai` using current `OPENAI_MODEL` (default `gpt-5.2`)
@@ -52,10 +65,22 @@ Set these provider keys in the runtime environment (do not hardcode):
 ## Runtime tuning knobs (per request)
 - `constraints.synthesis_max_tokens` overrides synthesis token budget per run.
 - Current mode defaults when unset:
-  - `single_*` / `routed`: `700`
-  - `ensemble`: `700` (per draft)
+  - `single_*` / `routed`: synthesis max tokens is uncapped (`null`), retrieval minimum `max(min_sources+8,14)`, ingestion target docs `max(min_sources+6,10)`
+  - `research_max`: synthesis max tokens uncapped (`null`), retrieval minimum `max(min_sources+12,18)`, ingestion target docs `max(min_sources+8,14)`
+  - `ensemble`: synthesis max tokens uncapped (`null`) per draft
+- Adaptive retrieval continuation:
+  - `SPARKIT_ADAPTIVE_RETRIEVAL` (default: `1`)
+  - `SPARKIT_ADAPTIVE_MIN_ROUNDS` (default: `2`)
+  - `SPARKIT_ADAPTIVE_MAX_ROUNDS` (default: planned round count)
+  - `SPARKIT_ADAPTIVE_MIN_NEW_DOCS` (default: `2`)
+  - `SPARKIT_ADAPTIVE_MIN_QUALITY_GAIN` (default: `0.03`)
+  - Behavior: retrieval stops early when rounds stop adding novel/high-relevance evidence, with decision trace in `retrieval_adaptive_gate`.
 
 ## Notes
+- Retrieval source coverage includes: arXiv, Crossref, Semantic Scholar, OpenAlex, and Europe PMC.
+- Optional Google-like discovery: Brave Search adapter (key-gated + science-domain filtering) when `SPARKIT_ENABLE_WEB_SEARCH=1`.
+- Retrieval uses local-first corpus lookup when populated, then falls back to live source federation.
+- Evidence ingestion/retrieval hard-blocks HLE-related domains (`huggingface.co`, `futurehouse.org`) to prevent benchmark-answer leakage through downloaded content.
 - `GEMINI_API_KEY` and `GOOGLE_API_KEY` are treated as alternatives for Google models.
 - Keep keys in environment/secrets manager only.
 - Default exact pricing map (per 1M tokens):
@@ -71,6 +96,9 @@ Set these provider keys in the runtime environment (do not hardcode):
   - `grok-4-fast-reasoning`: input cache hit `$0.20`, input cache miss `$0.20`, output `$0.50`
   - `grok-4-fast-non-reasoning`: input cache hit `$0.20`, input cache miss `$0.20`, output `$0.50`
   - `mistral-large-2512`: input cache hit `$2.00`, input cache miss `$2.00`, output `$6.00`
+- Brave Search request pricing (for retrieval web adapter):
+  - `$5.00 / 1,000 requests` = `$0.005` per request
+  - SPARKIT now tracks actual Brave request attempts during retrieval and adds this to run `provider_usage` as `provider=brave_web`, `model=search-api`.
 - Cost precision note: exact generation cost is computed when model pricing is configured (built-in defaults + `SPARKIT_MODEL_PRICING_JSON` overrides). Unknown models fall back to deterministic synthesis-stage estimates.
 - `SPARKIT_MODEL_PRICING_JSON` supports either:
   - `{"provider:model":{"input_cache_hit":...,"input_cache_miss":...,"output":...}}`
@@ -89,3 +117,4 @@ Set these provider keys in the runtime environment (do not hardcode):
 - Repeated-slice benchmark with CI: `make benchmark-repeated-slices`.
 - Full benchmark eval command: `make eval-benchmark-full`.
 - Drift check command (sample): `make drift-check-sample`.
+- Corpus build command (broad science ingestion): `make corpus-build`.

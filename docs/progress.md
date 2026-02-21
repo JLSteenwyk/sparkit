@@ -25,12 +25,34 @@ Last updated: 2026-02-21
 ## Current sprint focus
 - Full HLE Gold bio/chem 149-question benchmark execution and comparison (SPARKIT vs direct single-call).
 - Cost/usage accuracy hardening and provider-response robustness fixes.
+- Retrieval evidence quality improvements to reduce off-topic sources and improve chemistry/biology answer grounding.
 - Active execution: HLE-gold `single_*` SPARKIT and direct-call baselines running in tmux with safe parallelization.
 
 ## Blockers
 - None.
 
 ## Recent updates
+- 2026-02-21: Implemented adaptive retrieval continuation gate in orchestrator (`SPARKIT_ADAPTIVE_*` knobs) that stops retrieval rounds when novelty/relevance gains are low; emits `retrieval_adaptive_gate` trace stage for auditability.
+- 2026-02-21: Validated adaptive retrieval on HLE-5 live-tuned slice (`single_openai`, `gpt-5.2`):
+  - Non-adaptive live tuned: avg score `0.2`, total cost `$0.7040`, total latency `~799.6s`.
+  - Adaptive live tuned: avg score `0.2`, total cost `$0.2972`, total latency `~420.9s`.
+  - Net: held quality on this slice while reducing cost by `~57.8%` and latency by `~47.4%`.
+- 2026-02-21: Ran focused HLE-5 mixed slice (`q001,q002,q005,q010,q011`) to tune SPARKIT retrieval behavior. Results:
+  - `direct_openai` (`gpt-5.2`): avg score `0.0`, total latency `~19.0s`, total cost `$0.0116`.
+  - `single_openai` local-corpus-only (`SPARKIT_ENABLE_LIVE_RETRIEVAL=0`): avg score `0.0` (both baseline and deeper-retrieval variants), latency `~128-151s`.
+  - `single_openai` live retrieval tuned (`min_sources=12`, higher retrieval floor): avg score improved to `0.2` (1/5 correct), but with large cost/latency increase (total latency `~799.6s`, total cost `$0.7040`).
+  - Takeaway: real live retrieval adapters improved correctness on this slice, while local-only corpus retrieval underperformed; next tuning should prioritize retrieval precision and query/round budgeting to preserve gains without severe cost/latency blow-up.
+- 2026-02-21: Added retrieval runtime switch `SPARKIT_ENABLE_LIVE_RETRIEVAL` (`1` by default) to support local-corpus-only benchmark/debug loops when needed.
+- 2026-02-21: Added Brave Search retrieval cost accounting at exact per-request rate (`$5/1000` => `$0.005` each), wired from retrieval request telemetry into orchestrator run cost/provider usage.
+- 2026-02-21: Added local corpus infrastructure (`corpus_documents` + `corpus_chunks`) with local-first retrieval path and broad-science corpus builder script (`scripts_build_science_corpus.py`).
+- 2026-02-21: Implemented MCQ option-aware retrieval and option scoring/judging in orchestrator (`answer_choices` parsing, `options` retrieval intent, `mcq_option_scorer` trace stage with per-choice support/contradiction scores).
+- 2026-02-21: Expanded retrieval federation with OpenAlex + Europe PMC and added hard HLE-domain blocking in retrieval/ingestion (`huggingface.co`, `futurehouse.org`) to avoid benchmark data leakage in downloaded evidence.
+- 2026-02-21: Fixed SPARKIT run failure caused by NUL bytes in persisted text (`PostgreSQL text fields cannot contain NUL (0x00) bytes`) by adding sanitization in ingestion/evidence persistence paths.
+- 2026-02-21: Improved arXiv ingestion quality by extracting abstract blocks from `arxiv.org/abs/*` pages (instead of noisy page boilerplate), improving retrieval-to-synthesis grounding.
+- 2026-02-21: Removed practical synthesis token caps in SPARKIT by default (uncapped generation unless `constraints.synthesis_max_tokens` is explicitly set), and raised default retrieval/ingestion depth for stronger evidence coverage.
+- 2026-02-21: Implemented retrieval quality v1 in orchestrator: LLM-guided retrieval planner (segment decomposition + intent queries), mode-aware planned retrieval rounds, and relevance-based section chunk selection during ingestion to improve grounding quality.
+- 2026-02-21: Added retrieval planner/chunk-selection coverage tests and validated targeted suite (`18 passed` across orchestrator/retrieval tests).
+- 2026-02-21: Added explicit Priority-0 follow-up to improve retrieval evidence quality (query expansion/reranking + quality gates) after observing off-topic evidence in difficult exact-match chemistry prompts.
 - 2026-02-21: Replaced stalled `hle_gold_direct_batch_c_*` run with split direct runs to avoid provider blocking:
   - `hle_gold_direct_grok_split_20260221T024803Z`
   - `hle_gold_direct_mistral_split_20260221T024803Z`

@@ -2,15 +2,30 @@ from __future__ import annotations
 
 from services.orchestrator.app.engine import (
     ClaimEvidence,
+    _avg_relevance,
     _abstain_reasons,
     _anchor_coverage,
+    _build_mcq_option_judge_prompt,
+    _build_mcq_option_scoring_prompt,
     _build_claim_clusters,
+    _build_option_evidence_packs,
+    _build_round_queries_from_plan,
     _build_section_summaries,
     _build_synthesis_prompt,
+    _extract_answer_letter,
+    _has_discriminative_option_scores,
+    _mcq_lexical_option_scores,
+    _parse_mcq_option_scores,
     _extract_lexical_anchors,
+    _record_identity,
+    _env_bool,
+    _heuristic_retrieval_plan,
     _question_has_answer_choices,
     _record_relevance_score,
+    _select_confident_blended_option,
+    _select_best_section_chunk,
     _select_records_for_ingestion,
+    _split_question_and_choices,
 )
 from services.retrieval_service.app.models import LiteratureRecord
 
@@ -131,3 +146,199 @@ def test_lexical_anchor_extraction_and_coverage() -> None:
     anchors = _extract_lexical_anchors(question)
     assert any("cyclopent-1-en-1-yl" in item for item in anchors)
     assert _anchor_coverage("Contains cyclopent-1-en-1-yl term", anchors) > 0.0
+
+
+def test_retrieval_plan_builds_intent_queries() -> None:
+    question = "What catalytic steps control enantioselective bromination in styrene derivatives?"
+    plan = _heuristic_retrieval_plan(question)
+    rounds = _build_round_queries_from_plan(mode="single", question=question, plan=plan)
+    assert plan.intent_queries["primary"]
+    assert plan.intent_queries["methods"]
+    assert len(rounds) == 4
+    assert rounds[0][0] == "retrieval_round_1"
+
+
+def test_select_best_section_chunk_prefers_focus_term_overlap() -> None:
+    sections = [
+        ("intro", "This paper provides broad context on chemistry history and theory."),
+        (
+            "results",
+            "The key step is bromination of styrene with NBS under catalytic control and enantioselective induction.",
+        ),
+    ]
+    heading, chunk = _select_best_section_chunk(
+        question="Which catalytic mechanism explains enantioselective bromination of styrene?",
+        sections=sections,
+        focus_terms=["enantioselective bromination", "styrene", "catalytic mechanism"],
+    )
+    assert heading == "results"
+    assert "bromination" in chunk.lower()
+
+
+def test_split_question_and_choices_parses_mcq_structure() -> None:
+    question = (
+        "What happens to Braveheart expression?\n\n"
+        "Answer Choices:\n"
+        "A. increases in both\n"
+        "B. decreases in both\n"
+        "C. unchanged\n"
+    )
+    stem, choices = _split_question_and_choices(question)
+    assert stem == "What happens to Braveheart expression?"
+    assert choices["A"] == "increases in both"
+    assert choices["B"] == "decreases in both"
+    assert choices["C"] == "unchanged"
+
+
+def test_heuristic_retrieval_plan_includes_option_queries_for_mcq() -> None:
+    question = (
+        "Air-stable radicals in OLED have what key disadvantage?\n\n"
+        "Answer Choices:\n"
+        "A. oxygen instability\n"
+        "B. wide FWHM due to multiple emissions\n"
+        "C. low luminance from radical quenching\n"
+    )
+    plan = _heuristic_retrieval_plan(question)
+    assert plan.answer_choices
+    assert plan.intent_queries["options"]
+    joined = " ".join(plan.intent_queries["options"]).lower()
+    assert "wide fwhm due to multiple emissions" in joined
+    assert all("answer choices" not in segment.lower() for segment in plan.segments)
+    rounds = _build_round_queries_from_plan(mode="single", question=question, plan=plan)
+    assert any(name == "retrieval_round_option_hypotheses" for name, _ in rounds)
+
+
+def test_extract_answer_letter_prefers_xml_tag() -> None:
+    assert _extract_answer_letter("<answer>B</answer>") == "B"
+    assert _extract_answer_letter("Final: D") == "D"
+    assert _extract_answer_letter("No option") is None
+
+
+def test_mcq_option_judge_prompt_contains_choices_and_evidence() -> None:
+    prompt = _build_mcq_option_judge_prompt(
+        question="Which choice is correct?",
+        answer_choices={"A": "up", "B": "down"},
+        claim_texts=["Study reports up-regulation in both cohorts."],
+        claim_clusters=[{"label": "expression", "count": 1, "sample_claims": ["up-regulation"]}],
+        section_summaries=[{"section": "results", "summary": "Both cohorts increased."}],
+    )
+    assert "Answer choices:" in prompt
+    assert "A. up" in prompt
+    assert "B. down" in prompt
+    assert "Evidence:" in prompt
+
+
+def test_parse_mcq_option_scores_extracts_numeric_rows() -> None:
+    text = "A: support=0.20, contradiction=0.80\nB: support=0.75, contradiction=0.10"
+    scores = _parse_mcq_option_scores(text, {"A": "x", "B": "y"})
+    assert scores["A"]["support"] == 0.2
+    assert scores["A"]["contradiction"] == 0.8
+    assert round(scores["B"]["net"], 2) == 0.65
+
+
+def test_mcq_option_scoring_prompt_has_required_format() -> None:
+    prompt = _build_mcq_option_scoring_prompt(
+        question="Which choice is correct?",
+        answer_choices={"A": "up", "B": "down"},
+        claim_texts=["Evidence says up in both."],
+    )
+    assert "A: support=0.00, contradiction=0.00" in prompt
+    assert "Answer choices:" in prompt
+    assert "Evidence:" in prompt
+
+
+def test_option_score_discrimination_guard() -> None:
+    assert _has_discriminative_option_scores({}) is False
+    flat = {
+        "A": {"support": 0.0, "contradiction": 0.0, "net": 0.0},
+        "B": {"support": 0.0, "contradiction": 0.0, "net": 0.0},
+    }
+    assert _has_discriminative_option_scores(flat) is False
+    varied = {
+        "A": {"support": 0.2, "contradiction": 0.6, "net": -0.4},
+        "B": {"support": 0.7, "contradiction": 0.1, "net": 0.6},
+    }
+    assert _has_discriminative_option_scores(varied) is True
+
+
+def test_record_identity_prefers_doi_then_url() -> None:
+    doi_record = LiteratureRecord(
+        source="crossref",
+        title="DOI record",
+        abstract="a",
+        year=2024,
+        doi="10.1000/XYZ",
+        url="https://example.org/a",
+    )
+    url_record = LiteratureRecord(
+        source="arxiv",
+        title="URL record",
+        abstract="b",
+        year=2024,
+        url="https://example.org/B",
+    )
+    assert _record_identity(doi_record) == "doi:10.1000/xyz"
+    assert _record_identity(url_record) == "url:https://example.org/b"
+
+
+def test_avg_relevance_scores_nonempty_records() -> None:
+    question = "flux noise transmon mitigation"
+    records = [
+        LiteratureRecord(
+            source="arxiv",
+            title="Flux noise mitigation for transmon systems",
+            abstract="We improve transmon coherence under flux noise.",
+            year=2024,
+            url="https://example.org/r1",
+        ),
+        LiteratureRecord(
+            source="crossref",
+            title="Unrelated topic",
+            abstract="No overlap",
+            year=2024,
+            url="https://example.org/r2",
+        ),
+    ]
+    assert _avg_relevance(question, records) > 0.0
+    assert _avg_relevance(question, []) == 0.0
+
+
+def test_env_bool_parses_truthy_and_falsy(monkeypatch) -> None:
+    monkeypatch.setenv("SPARKIT_TEST_BOOL", "true")
+    assert _env_bool("SPARKIT_TEST_BOOL", False) is True
+    monkeypatch.setenv("SPARKIT_TEST_BOOL", "0")
+    assert _env_bool("SPARKIT_TEST_BOOL", True) is False
+
+
+def test_mcq_lexical_option_scores_handles_fwdh_alias() -> None:
+    scores = _mcq_lexical_option_scores(
+        answer_choices={"B": "wide FWDH because it has multiple emissions", "D": "low EQE because excitons are quenched"},
+        claim_texts=["The radical OLED shows broad FWHM and multiple emission bands."],
+    )
+    assert scores["B"]["lexical"] > scores["D"]["lexical"]
+
+
+def test_build_option_evidence_packs_targets_choice_overlap() -> None:
+    packs = _build_option_evidence_packs(
+        stem="Braveheart expression in ESC and differentiating heart cells",
+        answer_choices={"A": "increases in both cell types", "B": "decreases in both cell types"},
+        claim_texts=[
+            "Braveheart increases in embryonic stem cells and cardiomyocyte differentiation stages.",
+            "Another unrelated chemistry statement.",
+        ],
+    )
+    assert packs["A"]
+
+
+def test_select_confident_blended_option_requires_margin() -> None:
+    low_margin = {
+        "A": {"blended": 0.10, "net": 0.0, "lexical": 0.33},
+        "B": {"blended": 0.08, "net": 0.0, "lexical": 0.26},
+    }
+    assert _select_confident_blended_option(low_margin, min_margin=0.05, min_top_score=0.02) is None
+
+    high_margin = {
+        "A": {"blended": 0.15, "net": 0.1, "lexical": 0.30},
+        "B": {"blended": 0.03, "net": 0.0, "lexical": 0.10},
+    }
+    assert _select_confident_blended_option(high_margin, min_margin=0.05, min_top_score=0.02) == "A"

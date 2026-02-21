@@ -8,6 +8,8 @@ class BenchmarkQuestion(BaseModel):
     question: str
     domain: str = "general"
     subdomain: str = "general"
+    answer_type: str = "exactMatch"
+    correct_answer: str | None = None
     required_keywords: list[str] = Field(default_factory=list)
     optional_keywords: list[str] = Field(default_factory=list)
     must_have_citations: int = 1

@@ -3,7 +3,7 @@ PY ?= $(VENV)/bin/python
 PIP ?= $(VENV)/bin/pip
 ALEMBIC ?= $(VENV)/bin/alembic
 
-.PHONY: venv install db-upgrade db-downgrade db-current db-history test-compile test eval-sample eval-benchmark eval-benchmark-full benchmark-generate benchmark-generate-hle-biochem-20 benchmark-repeated-slices baseline-capture baseline-capture-official baseline-capture-quick baseline-capture-hle-biochem-20 baseline-capture-direct-calls-hle20 drift-check-sample drift-check-manifest
+.PHONY: venv install db-upgrade db-downgrade db-current db-history test-compile test eval-sample eval-benchmark eval-benchmark-full benchmark-generate benchmark-generate-hle-biochem-20 benchmark-repeated-slices baseline-capture baseline-capture-official baseline-capture-quick baseline-capture-hle-biochem-20 baseline-capture-direct-calls-hle20 drift-check-sample drift-check-manifest corpus-build
 
 venv:
 	python3 -m venv $(VENV)
@@ -69,3 +69,6 @@ drift-check-sample:
 
 drift-check-manifest:
 	$(PY) scripts_drift_check.py --candidate-manifest $(CANDIDATE_MANIFEST) --baseline-manifest $(BASELINE_MANIFEST) --thresholds benchmarks/drift_thresholds.json
+
+corpus-build:
+	$(PY) scripts_build_science_corpus.py

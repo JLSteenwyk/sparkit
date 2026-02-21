@@ -19,6 +19,9 @@ class PricingRates:
     output: float
 
 
+BRAVE_SEARCH_REQUEST_USD = 5.00 / 1000.0
+
+
 def estimate_stage_cost(stage: str, units: int = 1) -> float:
     # Non-generation stages do not incur model API costs in the current stack.
     # Keep synthesis fallback deterministic only for models missing exact pricing.
@@ -30,6 +33,10 @@ def estimate_stage_cost(stage: str, units: int = 1) -> float:
         "ensemble": 0.0,
     }
     return rates.get(stage, 0.001) * max(1, units)
+
+
+def estimate_brave_search_cost(request_count: int) -> float:
+    return max(0, int(request_count)) * BRAVE_SEARCH_REQUEST_USD
 
 
 DEFAULT_MODEL_PRICING: dict[tuple[str, str], PricingRates] = {

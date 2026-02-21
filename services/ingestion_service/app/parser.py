@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import re
+from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -9,8 +10,14 @@ from pypdf import PdfReader
 
 from .models import IngestionResponse, Section
 
+_DISALLOWED_INGEST_DOMAINS = {
+    "huggingface.co",
+    "futurehouse.org",
+}
+
 
 def _clean_text(text: str) -> str:
+    text = text.replace("\x00", " ")
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -18,6 +25,28 @@ def _clean_text(text: str) -> str:
 def _parse_html(content: bytes, url: str, max_chars: int) -> IngestionResponse:
     soup = BeautifulSoup(content, "html.parser")
     title = _clean_text(soup.title.get_text()) if soup.title and soup.title.get_text() else None
+
+    parsed = urlparse(url)
+    if "arxiv.org" in parsed.netloc and "/abs/" in parsed.path:
+        abstract_block = soup.find("blockquote", class_=lambda value: value and "abstract" in value.lower())
+        if abstract_block is not None:
+            abstract_text = _clean_text(abstract_block.get_text(" ", strip=True))
+            abstract_text = re.sub(r"^\s*abstract:\s*", "", abstract_text, flags=re.IGNORECASE)
+            if abstract_text:
+                arxiv_title = soup.find("h1", class_=lambda value: value and "title" in value.lower())
+                if arxiv_title is not None:
+                    parsed_title = _clean_text(arxiv_title.get_text(" ", strip=True))
+                    parsed_title = re.sub(r"^\s*title:\s*", "", parsed_title, flags=re.IGNORECASE)
+                    if parsed_title:
+                        title = parsed_title
+                trimmed = abstract_text[:max_chars]
+                return IngestionResponse(
+                    url=url,
+                    content_type="html",
+                    title=title,
+                    sections=[Section(heading="abstract", text=trimmed)],
+                    char_count=len(trimmed),
+                )
 
     sections: list[Section] = []
     article = soup.find("article")
@@ -64,6 +93,11 @@ def _parse_pdf(content: bytes, url: str, max_chars: int) -> IngestionResponse:
 
 
 def fetch_and_parse(url: str, max_chars: int = 30000, timeout_s: float = 20.0) -> IngestionResponse:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if any(host == dom or host.endswith(f".{dom}") for dom in _DISALLOWED_INGEST_DOMAINS):
+        raise ValueError(f"ingestion blocked for disallowed domain: {host}")
+
     headers = {"User-Agent": "SPARKIT/0.1"}
     with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
         response = client.get(url, headers=headers)

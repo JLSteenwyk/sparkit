@@ -116,6 +116,8 @@ def build_hle_biochem_subset(
                 "question": question_text,
                 "domain": domain,
                 "subdomain": _slugify(raw_subject),
+                "answer_type": row.get("answer_type"),
+                "correct_answer": row.get("answer"),
                 "required_keywords": required,
                 "optional_keywords": optional,
                 "must_have_citations": 2,
@@ -124,7 +126,6 @@ def build_hle_biochem_subset(
                 "source_id": row.get("id"),
                 "source_category": category,
                 "source_subject": raw_subject,
-                "answer_type": row.get("answer_type"),
             }
         )
     return benchmark_questions
@@ -153,4 +154,3 @@ def write_hle_biochem_subset(
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(questions, indent=2))
     return len(questions)
-

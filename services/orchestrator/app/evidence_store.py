@@ -22,6 +22,12 @@ def _doc_id(record: LiteratureRecord) -> str:
     return f"doc_{digest}"
 
 
+def _sanitize_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return value.replace("\x00", " ")
+
+
 @dataclass(frozen=True)
 class StoredEvidence:
     doc_id: str
@@ -45,7 +51,11 @@ class EvidenceStore:
     ) -> StoredEvidence:
         doc_id = _doc_id(record)
         passage_id = f"psg_{uuid4().hex}"
-        passage_text = text if text is not None else (record.abstract or "")
+        passage_text = _sanitize_text(text if text is not None else (record.abstract or "")) or ""
+        section_clean = _sanitize_text(section) or "abstract"
+        title_clean = _sanitize_text(record.title) or record.title
+        abstract_clean = _sanitize_text(record.abstract)
+        authors_clean = [_sanitize_text(author) or "" for author in record.authors]
 
         with self._conn() as conn:
             with conn.cursor() as cur:
@@ -66,9 +76,9 @@ class EvidenceStore:
                     (
                         doc_id,
                         record.source,
-                        record.title,
-                        record.abstract,
-                        json.dumps(record.authors),
+                        title_clean,
+                        abstract_clean,
+                        json.dumps(authors_clean),
                         record.year,
                         record.doi,
                         record.url,
@@ -80,7 +90,7 @@ class EvidenceStore:
                     INSERT INTO passages (passage_id, doc_id, section, text, offset_start, offset_end, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (passage_id, doc_id, section, passage_text, 0, len(passage_text), _now_utc()),
+                    (passage_id, doc_id, section_clean, passage_text, 0, len(passage_text), _now_utc()),
                 )
             conn.commit()
 
@@ -88,6 +98,9 @@ class EvidenceStore:
 
     def insert_claim(self, run_id: str, text: str, claim_type: str, support_score: float, status: str) -> str:
         claim_id = f"clm_{uuid4().hex}"
+        clean_text = _sanitize_text(text) or ""
+        clean_status = _sanitize_text(status) or status
+        clean_claim_type = _sanitize_text(claim_type) or claim_type
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -97,7 +110,7 @@ class EvidenceStore:
                         contradiction_score, status, created_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (claim_id, run_id, text, claim_type, support_score, 0.0, status, _now_utc()),
+                    (claim_id, run_id, clean_text, clean_claim_type, support_score, 0.0, clean_status, _now_utc()),
                 )
             conn.commit()
         return claim_id
@@ -106,6 +119,7 @@ class EvidenceStore:
         self, claim_id: str, passage_id: str, relation: str = "supports", strength: float = 0.8
     ) -> str:
         link_id = f"lnk_{uuid4().hex}"
+        clean_relation = _sanitize_text(relation) or relation
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -114,7 +128,15 @@ class EvidenceStore:
                         link_id, claim_id, passage_id, relation, strength, rationale, created_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (link_id, claim_id, passage_id, relation, strength, "title/abstract support", _now_utc()),
+                    (
+                        link_id,
+                        claim_id,
+                        passage_id,
+                        clean_relation,
+                        strength,
+                        _sanitize_text("title/abstract support"),
+                        _now_utc(),
+                    ),
                 )
             conn.commit()
         return link_id

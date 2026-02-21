@@ -6,10 +6,13 @@ Last updated: 2026-02-21
 1. Execute HLE-gold triplicate runs (SPARKIT + direct baselines) and publish consolidated results.
 Impact: High. Effort: Medium.
 Deliverable: 3x replicated manifests with aggregate quality/calibration/cost/latency comparison.
-2. Answerability gating.
+2. Retrieval evidence quality upgrade (high relevance + domain fit + answerability).
+Impact: High. Effort: Medium.
+Deliverable: retrieval quality gate + domain-aware query expansion/reranking so synthesis uses question-aligned papers/passages (especially for chemistry mechanism/exact-match prompts). v1 shipped: LLM retrieval planner + intent queries + chunk-level section selection.
+3. Answerability gating.
 Impact: High. Effort: Low-Medium.
 Deliverable: policy gate that returns structured insufficient-evidence outcomes when retrieval/verifier quality is below threshold.
-3. Complete HLE149 final comparison table.
+4. Complete HLE149 final comparison table.
 Impact: High. Effort: Low.
 Deliverable: final HLE149 comparison across all active `single_*`, `routed_frontier`, `routed_frontier_plus`, and direct baselines.
 

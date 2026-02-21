@@ -11,20 +11,29 @@ from services.orchestrator.app.policy import estimate_generation_cost, has_exact
 from services.orchestrator.app.providers import generate_text
 
 from .evaluator import evaluate, load_questions
+from .schemas import BenchmarkQuestion
 from .schemas import Prediction
 
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
-def _build_direct_prompt(question: str) -> str:
+def _build_direct_prompt(question: BenchmarkQuestion) -> str:
+    if (question.answer_type or "").lower() == "multiplechoice":
+        return (
+            "You are answering a STEM multiple-choice question.\n"
+            "Return ONLY a single XML tag containing the chosen option letter.\n"
+            "Format exactly: <answer>X</answer> where X is one letter.\n"
+            "No extra text.\n\n"
+            f"Question: {question.question}"
+        )
     return (
         "You are answering a STEM literature-style question.\n"
         "Provide a high-level academic answer only; do not provide actionable lab protocols.\n"
         "Return strict JSON only with this schema:\n"
         '{"answer_text":"<final answer>","answer_confidence":<float 0..1>}.\n'
         "No markdown, no code fences, no extra keys.\n\n"
-        f"Question: {question}"
+        f"Question: {question.question}"
     )
 
 
@@ -174,7 +183,7 @@ def run_direct_single_call_benchmark_with_predictions(
     failures: list[dict[str, str]] = []
 
     for question in questions:
-        prompt = _build_direct_prompt(question.question)
+        prompt = _build_direct_prompt(question)
         result = _generate_with_retries(provider, prompt, max_tokens=max_tokens)
         failed = False
         failed_error = ""

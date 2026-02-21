@@ -27,7 +27,7 @@ class Constraints(BaseModel):
     max_latency_s: int | None = Field(default=None, ge=10, le=7200)
     max_cost_usd: float = Field(default=3.0, ge=0.05, le=100.0)
     min_sources: int = Field(default=5, ge=1, le=50)
-    synthesis_max_tokens: int | None = Field(default=None, ge=128, le=4096)
+    synthesis_max_tokens: int | None = Field(default=None, ge=128)
 
 
 class Progress(BaseModel):

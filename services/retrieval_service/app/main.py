@@ -24,5 +24,5 @@ def health() -> dict[str, str]:
 
 @app.post("/search", response_model=SearchResponse)
 def search(request: SearchRequest) -> SearchResponse:
-    records, source_errors = search_literature(request.query, request.max_results)
+    records, source_errors, _stats = search_literature(request.query, request.max_results)
     return SearchResponse(records=records, source_errors=source_errors)

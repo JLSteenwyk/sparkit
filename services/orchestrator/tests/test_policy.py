@@ -3,6 +3,7 @@ from __future__ import annotations
 from services.orchestrator.app.policy import (
     BudgetState,
     contradiction_depth_from_budget,
+    estimate_brave_search_cost,
     estimate_generation_cost,
     estimate_stage_cost,
     has_exact_pricing,
@@ -121,3 +122,8 @@ def test_generation_cost_gemini_31_tiered_pricing_switches_above_200k_prompt() -
         tokens_output=10_000,
     )
     assert high_tier > low_tier
+
+
+def test_brave_request_cost() -> None:
+    assert abs(estimate_brave_search_cost(1) - 0.005) < 1e-12
+    assert abs(estimate_brave_search_cost(1000) - 5.0) < 1e-12
