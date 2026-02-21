@@ -75,6 +75,9 @@ Set these provider keys in the runtime environment (do not hardcode):
   - `SPARKIT_ADAPTIVE_MIN_NEW_DOCS` (default: `2`)
   - `SPARKIT_ADAPTIVE_MIN_QUALITY_GAIN` (default: `0.03`)
   - Behavior: retrieval stops early when rounds stop adding novel/high-relevance evidence, with decision trace in `retrieval_adaptive_gate`.
+- Answerability gate behavior:
+  - `SPARKIT_DISABLE_HARD_ABSTAIN` (default: `0`)
+  - When set to `1`, SPARKIT keeps the best synthesized answer text (soft-abstain) instead of replacing it with an "insufficient evidence" refusal, while still lowering confidence and recording abstain reasons.
 
 ## Notes
 - Retrieval source coverage includes: arXiv, Crossref, Semantic Scholar, OpenAlex, and Europe PMC.

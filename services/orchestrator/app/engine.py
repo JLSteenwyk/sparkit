@@ -2005,6 +2005,7 @@ def execute_orchestration(
         synthesis_failures=synthesis_failures,
     )
     should_abstain = len(abstain_reason_codes) >= 2
+    disable_hard_abstain = _env_bool("SPARKIT_DISABLE_HARD_ABSTAIN", False)
 
     final_text = (
         draft_texts[0]
@@ -2020,28 +2021,49 @@ def execute_orchestration(
     if mode == Mode.ENSEMBLE.value and draft_texts:
         final_text = max(draft_texts, key=len)
     if should_abstain:
-        final_text = (
-            "Insufficient evidence quality to provide a reliable answer. "
-            "Retrieved evidence was sparse or weakly grounded for this question."
-        )
-        answer_conf = min(answer_conf, 0.2)
         uncertainty_reasons.extend(f"abstain:{code}" for code in abstain_reason_codes)
-        stages.append(
-            TraceStage(
-                name="answerability_gate",
-                status=Status.COMPLETED,
-                model="policy",
-                started_at=datetime.now(timezone.utc),
-                ended_at=datetime.now(timezone.utc),
-                artifacts={
-                    "abstained": True,
-                    "reasons": abstain_reason_codes,
-                    "support_coverage": features.support_coverage,
-                    "unsupported_claims": unsupported_claims,
-                    "contradiction_flags": verifier_result.contradiction_flags,
-                },
+        if disable_hard_abstain:
+            answer_conf = min(answer_conf, 0.35)
+            stages.append(
+                TraceStage(
+                    name="answerability_gate",
+                    status=Status.COMPLETED,
+                    model="policy",
+                    started_at=datetime.now(timezone.utc),
+                    ended_at=datetime.now(timezone.utc),
+                    artifacts={
+                        "abstained": False,
+                        "soft_abstain": True,
+                        "reasons": abstain_reason_codes,
+                        "support_coverage": features.support_coverage,
+                        "unsupported_claims": unsupported_claims,
+                        "contradiction_flags": verifier_result.contradiction_flags,
+                    },
+                )
             )
-        )
+        else:
+            final_text = (
+                "Insufficient evidence quality to provide a reliable answer. "
+                "Retrieved evidence was sparse or weakly grounded for this question."
+            )
+            answer_conf = min(answer_conf, 0.2)
+            stages.append(
+                TraceStage(
+                    name="answerability_gate",
+                    status=Status.COMPLETED,
+                    model="policy",
+                    started_at=datetime.now(timezone.utc),
+                    ended_at=datetime.now(timezone.utc),
+                    artifacts={
+                        "abstained": True,
+                        "soft_abstain": False,
+                        "reasons": abstain_reason_codes,
+                        "support_coverage": features.support_coverage,
+                        "unsupported_claims": unsupported_claims,
+                        "contradiction_flags": verifier_result.contradiction_flags,
+                    },
+                )
+            )
     else:
         stages.append(
             TraceStage(
