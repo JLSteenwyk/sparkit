@@ -1,6 +1,6 @@
 # Configuration
 
-Last updated: 2026-02-21
+Last updated: 2026-02-22
 
 ## Required environment variables
 Set these provider keys in the runtime environment (do not hardcode):
@@ -22,10 +22,14 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `KIMI_BASE_URL` (default: `https://api.moonshot.ai`)
 - `KIMI_TEMPERATURE` (default: `1.0`)
 - `OPENAI_MODEL` (default: `gpt-5.2`)
+- `OPENAI_REASONING_EFFORT` (optional; `low|medium|high|xhigh`, applied for GPT-5 models via Responses API)
 - `ANTHROPIC_MODEL` (default: `claude-opus-4-6`)
+- `ANTHROPIC_THINKING_ENABLED` (default: `0`; set `1` to enable Claude thinking mode)
+- `ANTHROPIC_THINKING_BUDGET_TOKENS` (default: `3000`; effective only when thinking is enabled and token budget allows)
 - `KIMI_MODEL` (default: `kimi-k2-turbo-preview`)
 - `GEMINI_MODEL` (default: `gemini-3-pro-preview`)
   - Also supported in exact pricing: `gemini-3.1-pro-preview`
+- `GEMINI_THINKING_BUDGET_TOKENS` (default: `0`; set >0 to enable Gemini `generationConfig.thinkingConfig.thinkingBudget`)
 - `DEEPSEEK_MODEL` (default: `deepseek-reasoner`)
 - `GROK_MODEL` (default: `grok-4-0709`)
   - Also supported in exact pricing: `grok-4-fast-reasoning`, `grok-4-fast-non-reasoning`
@@ -49,6 +53,23 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `SPARKIT_MODEL_PRICING_JSON` (optional per-model pricing override map)
 - `SPARKIT_ENABLE_WEB_SEARCH` (default: `0`; set `1` to enable Brave web-search adapter in retrieval)
 - `SPARKIT_ENABLE_LIVE_RETRIEVAL` (default: `1`; set `0` to disable live network adapters and use local corpus retrieval only)
+- `SPARKIT_ENABLE_FALSIFICATION_ROUND` (default: `1`; adds a dedicated falsification retrieval round)
+- `SPARKIT_FALSIFICATION_MAX_QUERIES` (default: `10`; cap for generated falsification queries)
+- `SPARKIT_FALSIFICATION_MAX_OPTIONS` (default: `2`; MCQ falsification focuses on top candidate options)
+- `SPARKIT_ENABLE_SEMANTIC_RERANK` (default: `0`; enables stage-targeted LLM semantic reranking for retrieval rounds)
+- `SPARKIT_SEMANTIC_RERANK_STAGES` (default: `retrieval_round_2_gap_fill,retrieval_round_3_adversarial,retrieval_round_4_falsification`)
+- `SPARKIT_ENABLE_SEMANTIC_RERANK_FINAL` (default: inherits `SPARKIT_ENABLE_SEMANTIC_RERANK`; reranks final ingestion set before parsing)
+- `SPARKIT_SEMANTIC_RERANK_CANDIDATES` (default: `18`; candidate cap for semantic rerank prompt)
+- `SPARKIT_INGESTION_DIVERSITY_LAMBDA` (default: `0.75`; MMR-style relevance/novelty tradeoff for ingestion selection)
+- `SPARKIT_ENABLE_CLAIM_GAP_LOOP` (default: `1`; injects claim-gap follow-up queries from each completed retrieval round into the next round)
+- `SPARKIT_CLAIM_GAP_MAX_QUERIES` (default: `4`; max injected claim-gap queries per stage)
+- `SPARKIT_CLAIM_GAP_MAX_NEXT_QUERIES` (default: `12`; max merged query count for next stage after gap injection)
+- `SPARKIT_CLAIM_GAP_REQUIRE_LOW_EVIDENCE` (default: `1`; only inject gaps when stage evidence appears weak)
+- `SPARKIT_CLAIM_GAP_MIN_NEW_DOCS_TRIGGER` (default: `2`; low-novelty threshold for claim-gap injection)
+- `SPARKIT_CLAIM_GAP_MIN_RELEVANCE_TRIGGER` (default: `1.2`; low-relevance threshold for claim-gap injection)
+- `SPARKIT_CLAIM_GAP_MAX_COST_RATIO` (default: `0.7`; skip claim-gap injection when spent/max_cost exceeds ratio)
+- `SPARKIT_CLAIM_GAP_MAX_LATENCY_RATIO` (default: `0.7`; skip claim-gap injection when elapsed/max_latency exceeds ratio)
+- `SPARKIT_CLAIM_GAP_FORCE` (default: `0`; force claim-gap injection regardless of evidence/headroom guards)
 
 ## Benchmark model presets
 - `single_openai`: provider `openai` using current `OPENAI_MODEL` (default `gpt-5.2`)
@@ -85,6 +106,8 @@ Set these provider keys in the runtime environment (do not hardcode):
 - Retrieval uses local-first corpus lookup when populated, then falls back to live source federation.
 - Evidence ingestion/retrieval hard-blocks HLE-related domains (`huggingface.co`, `futurehouse.org`) to prevent benchmark-answer leakage through downloaded content.
 - `GEMINI_API_KEY` and `GOOGLE_API_KEY` are treated as alternatives for Google models.
+- Gemini thinking config note: `thinkingConfig` must be nested under `generationConfig`.
+- Anthropic thinking note: SPARKIT omits `temperature` when thinking mode is enabled for Messages API compatibility.
 - Keep keys in environment/secrets manager only.
 - Default exact pricing map (per 1M tokens):
   - `gpt-5.2`: input cache hit `$0.175`, input cache miss `$1.75`, output `$14.00`

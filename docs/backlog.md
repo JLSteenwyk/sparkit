@@ -1,8 +1,17 @@
 # Backlog
 
-Last updated: 2026-02-21
+Last updated: 2026-02-22
 
 ## Priority 0 (next)
+0. Proposal-voted retrieval upgrade pack (Top 6 methods from `scripts_run_claudep_proposals_runner.sh`).
+Impact: Very High. Effort: High.
+Deliverable: implement and benchmark the six most frequent architecture upgrades below.
+   1) Contradiction/falsification retrieval rounds (targeted "evidence against" queries).
+   2) MCQ option-specific retrieval/scoring (per-choice discriminative evidence packs).
+   3) Closed-loop retrieval + gap-fill (round N+1 based on unresolved claims from round N).
+   4) Diversity-aware evidence selection and dedup balancing.
+   5) Query decomposition/planning into focused sub-queries.
+   6) Semantic reranking (BM25/embedding/cross-encoder passage rerank).
 1. Execute HLE-gold triplicate runs (SPARKIT + direct baselines) and publish consolidated results.
 Impact: High. Effort: Medium.
 Deliverable: 3x replicated manifests with aggregate quality/calibration/cost/latency comparison.
@@ -15,6 +24,9 @@ Deliverable: policy gate that returns structured insufficient-evidence outcomes 
 4. Complete HLE149 final comparison table.
 Impact: High. Effort: Low.
 Deliverable: final HLE149 comparison across all active `single_*`, `routed_frontier`, `routed_frontier_plus`, and direct baselines.
+5. Enable high-effort reasoning modes for OpenAI, Anthropic, and Gemini in SPARKIT provider clients.
+Impact: High. Effort: Medium.
+Deliverable: provider-specific reasoning controls wired and configurable (`OpenAI reasoning.effort=xhigh`, `Anthropic thinking budget`, `Gemini generationConfig.thinkingConfig`) with smoke tests and benchmark deltas.
 
 ## Priority 1
 1. Evidence scoring/filtering before synthesis.

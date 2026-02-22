@@ -1,6 +1,6 @@
 # Progress Tracker
 
-Last updated: 2026-02-21
+Last updated: 2026-02-22
 
 ## Project status
 - Overall phase: Advanced pipeline implementation
@@ -32,6 +32,55 @@ Last updated: 2026-02-21
 - None.
 
 ## Recent updates
+- 2026-02-22: Implemented top-6 retrieval upgrade v1 in orchestrator:
+  - Added explicit falsification retrieval round (`retrieval_round_4_falsification`) with option-focused query generation.
+  - Added optional semantic reranking hook for retrieval and final ingestion selection.
+  - Upgraded ingestion selection to relevance+novelty (MMR-style) balancing for better source diversity/dedup.
+  - Verifier now uses adversarial + falsification evidence pools.
+  - Added retrieval-upgrade tests: `services/orchestrator/tests/test_engine_retrieval_upgrades.py`.
+- 2026-02-22: Ran HLE-5 validation for top-6 v1:
+  - `benchmarks/results/hle5_single_openai_top6_v1_20260222T182915Z/`
+  - Avg rubric `0.2` (unchanged vs xhigh baseline), total cost `$0.0598115`, total latency `407.081s`.
+- 2026-02-22: Implemented top-6 tuning v2:
+  - Falsification restricted to top candidate options (`SPARKIT_FALSIFICATION_MAX_OPTIONS=2`).
+  - Stage-targeted semantic reranking defaults to gap-fill/adversarial/falsification rounds.
+  - Added chemistry-entity-aware query tightening in heuristic planner.
+- 2026-02-22: Ran HLE-5 validation for top-6 v2:
+  - `benchmarks/results/hle5_single_openai_top6_v2_20260222T184907Z/`
+  - Avg rubric `0.2` (unchanged), total cost `$0.05514425` (slightly lower), total latency `417.681s`.
+- 2026-02-22: Implemented closed-loop claim-gap injection (top-6 missing piece):
+  - Added `SPARKIT_ENABLE_CLAIM_GAP_LOOP` with planning-provider query generation after each retrieval stage.
+  - Gap queries are merged into the next retrieval stage (`SPARKIT_CLAIM_GAP_MAX_QUERIES`, `SPARKIT_CLAIM_GAP_MAX_NEXT_QUERIES`).
+  - Added trace stage `retrieval_claim_gap_loop` for auditability.
+  - Added tests for claim-gap query parsing/fallback (`services/orchestrator/tests/test_engine_retrieval_upgrades.py`).
+- 2026-02-22: Added claim-gap budget/evidence guardrail to avoid runaway latency/cost:
+  - New gate `retrieval_claim_gap_gate` traces injection decision + reason per stage.
+  - Claim-gap injection now requires weak evidence by default and sufficient cost/latency headroom.
+  - Added knobs: `SPARKIT_CLAIM_GAP_REQUIRE_LOW_EVIDENCE`, `SPARKIT_CLAIM_GAP_MIN_NEW_DOCS_TRIGGER`, `SPARKIT_CLAIM_GAP_MIN_RELEVANCE_TRIGGER`, `SPARKIT_CLAIM_GAP_MAX_COST_RATIO`, `SPARKIT_CLAIM_GAP_MAX_LATENCY_RATIO`, `SPARKIT_CLAIM_GAP_FORCE`.
+- 2026-02-22: Ran HLE-5 validation for top-6 v4 + claim-gap gate:
+  - `benchmarks/results/hle5_single_openai_top6_v4_claimgap_gate_20260222T192351Z/`
+  - Avg rubric `0.2` (unchanged), calibration (`Brier 0.618225`, `ECE 0.691`) aligned with top-6 v1.
+  - Runtime/cost improved substantially vs un-gated claim-gap v3 (`457.694s` and `$0.059507` vs `923.892s` and `$0.066386`), while keeping the same score.
+- 2026-02-22: Ran HLE-5 validation for top-6 v3 + claim-gap:
+  - `benchmarks/results/hle5_single_openai_top6_v3_claimgap_20260222T190203Z/`
+  - Avg rubric `0.2` (unchanged), calibration improved (Brier `0.54837`, ECE `0.638`), but cost/latency rose (`$0.06638625`, `923.892s`).
+- 2026-02-22: Reviewed `scripts_run_claudep_proposals_runner.sh` outputs and selected the top 6 recurring improvement methods as the active retrieval upgrade pack:
+  1) falsification rounds, 2) option-specific MCQ retrieval, 3) closed-loop gap-fill retrieval, 4) diversity-aware selection/dedup, 5) query decomposition planner, 6) semantic reranking.
+- 2026-02-22: Added high-effort reasoning/thinking controls in SPARKIT provider clients:
+  - OpenAI: `OPENAI_REASONING_EFFORT` (`low|medium|high|xhigh`) for GPT-5 models via Responses API.
+  - Anthropic: `ANTHROPIC_THINKING_ENABLED`, `ANTHROPIC_THINKING_BUDGET_TOKENS` (with compatibility handling for low-token calls and thinking-mode request shape).
+  - Gemini: `GEMINI_THINKING_BUDGET_TOKENS` wired to `generationConfig.thinkingConfig.thinkingBudget`.
+- 2026-02-22: Ran reasoning/thinking smoke validation and documented payload compatibility:
+  - `benchmarks/results/reasoning_smoke_20260222T172431Z.json`
+  - `benchmarks/results/gemini_high_effort_smoke_20260222T1728Z.json`
+  - `docs/reasoning-params-smoke.md`
+- 2026-02-22: Ran HLE-5 SPARKIT `single_openai` with `gpt-5.2` + `OPENAI_REASONING_EFFORT=xhigh`:
+  - `benchmarks/results/hle5_single_openai_gpt52_xhigh_reasoning_20260222T173533Z/`
+  - Avg rubric `0.2` (1/5), total cost `$0.05798625`, total latency `390.916s`, failures `0`.
+- 2026-02-22: Ran HLE-5 SPARKIT high-thinking comparison for Anthropic + Gemini:
+  - `benchmarks/results/hle5_single_anthropic_gemini_high_thinking_20260222T181121Z/`
+  - `single_anthropic` avg rubric `0.0`, total cost `$0.097675`, total latency `423.568s`, failures `0`.
+  - `single_gemini` avg rubric `0.0`, total cost `$0.026192`, total latency `351.049s`, failures `0`.
 - 2026-02-21: Implemented adaptive retrieval continuation gate in orchestrator (`SPARKIT_ADAPTIVE_*` knobs) that stops retrieval rounds when novelty/relevance gains are low; emits `retrieval_adaptive_gate` trace stage for auditability.
 - 2026-02-21: Validated adaptive retrieval on HLE-5 live-tuned slice (`single_openai`, `gpt-5.2`):
   - Non-adaptive live tuned: avg score `0.2`, total cost `$0.7040`, total latency `~799.6s`.

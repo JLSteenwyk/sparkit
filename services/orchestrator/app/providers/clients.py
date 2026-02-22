@@ -128,6 +128,7 @@ class OpenAIClient(BaseProviderClient):
     def __init__(self) -> None:
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.model = os.getenv("OPENAI_MODEL", "gpt-5.2")
+        self.reasoning_effort = (os.getenv("OPENAI_REASONING_EFFORT", "") or "").strip().lower()
         if not self.api_key:
             raise ProviderClientError("OPENAI_API_KEY is not set")
 
@@ -135,6 +136,7 @@ class OpenAIClient(BaseProviderClient):
         chat_url = "https://api.openai.com/v1/chat/completions"
         responses_url = "https://api.openai.com/v1/responses"
         headers = {"Authorization": f"Bearer {self.api_key}"}
+        use_reasoning = self.model.startswith("gpt-5") and self.reasoning_effort in {"low", "medium", "high", "xhigh"}
         chat_payload: dict[str, object] = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -149,7 +151,17 @@ class OpenAIClient(BaseProviderClient):
         started = perf_counter()
         try:
             with httpx.Client(timeout=timeout_s) as client:
-                response = client.post(chat_url, headers=headers, json=chat_payload)
+                if use_reasoning:
+                    responses_payload: dict[str, object] = {
+                        "model": self.model,
+                        "input": prompt,
+                        "reasoning": {"effort": self.reasoning_effort},
+                    }
+                    if max_tokens is not None:
+                        responses_payload["max_output_tokens"] = max_tokens
+                    response = client.post(responses_url, headers=headers, json=responses_payload)
+                else:
+                    response = client.post(chat_url, headers=headers, json=chat_payload)
                 if response.status_code == 404 and self.model.startswith("gpt-5"):
                     # Some GPT-5 variants are served on /v1/responses only.
                     responses_payload: dict[str, object] = {
@@ -228,6 +240,13 @@ class AnthropicClient(BaseProviderClient):
     def __init__(self) -> None:
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
         self.model = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-6")
+        self.thinking_enabled = (os.getenv("ANTHROPIC_THINKING_ENABLED", "0") or "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.thinking_budget_tokens = int(os.getenv("ANTHROPIC_THINKING_BUDGET_TOKENS", "3000") or "3000")
         if not self.api_key:
             raise ProviderClientError("ANTHROPIC_API_KEY is not set")
 
@@ -241,10 +260,23 @@ class AnthropicClient(BaseProviderClient):
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,
         }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        if not self.thinking_enabled:
+            payload["temperature"] = 0.2
+        resolved_max_tokens = max_tokens
+        if resolved_max_tokens is None:
+            # Anthropic Messages API requires max_tokens.
+            resolved_max_tokens = 1200
+        payload["max_tokens"] = resolved_max_tokens
+        if self.thinking_enabled:
+            budget_cap = max(0, resolved_max_tokens - 256)
+            budget = min(max(1024, self.thinking_budget_tokens), budget_cap) if budget_cap >= 1024 else 0
+            # Skip thinking on low-token calls (e.g., planner/verifier micro-calls).
+            if budget >= 1024:
+                payload["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": budget,
+                }
         started = perf_counter()
         try:
             with httpx.Client(timeout=timeout_s) as client:
@@ -357,6 +389,7 @@ class GeminiClient(BaseProviderClient):
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         self.model = os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
+        self.thinking_budget_tokens = int(os.getenv("GEMINI_THINKING_BUDGET_TOKENS", "0") or "0")
         if not self.api_key:
             raise ProviderClientError("GEMINI_API_KEY or GOOGLE_API_KEY is not set")
 
@@ -368,6 +401,8 @@ class GeminiClient(BaseProviderClient):
         generation_config: dict[str, object] = {"temperature": 0.2}
         if max_tokens is not None:
             generation_config["maxOutputTokens"] = max_tokens
+        if self.thinking_budget_tokens > 0:
+            generation_config["thinkingConfig"] = {"thinkingBudget": self.thinking_budget_tokens}
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": generation_config,

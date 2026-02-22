@@ -158,13 +158,38 @@ def _select_records_for_ingestion(
         if len(selected) >= target_docs:
             return selected
 
-    # Second pass: fill remaining slots by relevance.
-    for record in scored:
-        if record in selected:
-            continue
-        selected.append(record)
-        if len(selected) >= target_docs:
+    # Second pass: fill remaining slots by relevance + novelty to avoid near-duplicates.
+    mmr_lambda = _env_float("SPARKIT_INGESTION_DIVERSITY_LAMBDA", 0.75, minimum=0.0)
+    mmr_lambda = min(1.0, mmr_lambda)
+    selected_keys = {(_record_identity(item)) for item in selected}
+    while len(selected) < target_docs:
+        best_record: LiteratureRecord | None = None
+        best_score = float("-inf")
+        for record in scored:
+            rid = _record_identity(record)
+            if rid in selected_keys:
+                continue
+            base = _record_relevance_score(question, record, boost_terms)
+            title_tokens = set(_tokenize(record.title))
+            novelty_penalty = 0.0
+            if selected:
+                max_overlap = 0.0
+                for prior in selected:
+                    prior_tokens = set(_tokenize(prior.title))
+                    if not title_tokens and not prior_tokens:
+                        continue
+                    overlap = len(title_tokens & prior_tokens) / max(1, len(title_tokens | prior_tokens))
+                    if overlap > max_overlap:
+                        max_overlap = overlap
+                novelty_penalty = max_overlap
+            mmr_score = (mmr_lambda * base) - ((1.0 - mmr_lambda) * novelty_penalty)
+            if mmr_score > best_score:
+                best_score = mmr_score
+                best_record = record
+        if best_record is None:
             break
+        selected.append(best_record)
+        selected_keys.add(_record_identity(best_record))
     return selected
 
 
@@ -388,6 +413,77 @@ def _build_option_evidence_packs(
     return packs
 
 
+def _build_option_dossiers(
+    stem: str,
+    answer_choices: dict[str, str],
+    claim_texts: list[str],
+    section_summaries: list[dict[str, str]] | None = None,
+    top_k: int = 4,
+) -> dict[str, dict[str, object]]:
+    corpus_snippets = list(claim_texts)
+    if section_summaries:
+        corpus_snippets.extend(row.get("summary", "") for row in section_summaries if row.get("summary"))
+    choice_tokens = {label: set(_tokenize(text)) for label, text in answer_choices.items()}
+    stem_tokens = set(_tokenize(stem))
+    dossiers: dict[str, dict[str, object]] = {}
+
+    for label, choice in sorted(answer_choices.items()):
+        target = choice_tokens.get(label, set())
+        scored_support: list[tuple[float, str]] = []
+        scored_counter: list[tuple[float, str]] = []
+        for snippet in corpus_snippets:
+            snippet_tokens = set(_tokenize(snippet))
+            if not snippet_tokens:
+                continue
+            own_overlap = len(target & snippet_tokens)
+            stem_overlap = len(stem_tokens & snippet_tokens)
+            other_overlap = max(
+                (len(tokens & snippet_tokens) for other, tokens in choice_tokens.items() if other != label),
+                default=0,
+            )
+            support_score = (2.0 * own_overlap) + (0.8 * stem_overlap) - (1.2 * other_overlap)
+            if support_score > 0.2:
+                scored_support.append((support_score, snippet))
+            elif own_overlap == 0 and other_overlap > 0:
+                scored_counter.append((float(other_overlap), snippet))
+        support_snippets = [text for _, text in sorted(scored_support, key=lambda item: item[0], reverse=True)[:top_k]]
+        counter_snippets = [text for _, text in sorted(scored_counter, key=lambda item: item[0], reverse=True)[:top_k]]
+        dossier_score = sum(score for score, _ in sorted(scored_support, key=lambda item: item[0], reverse=True)[:top_k])
+        dossiers[label] = {
+            "choice": choice,
+            "support_snippets": support_snippets,
+            "counter_snippets": counter_snippets,
+            "dossier_score": dossier_score,
+        }
+    return dossiers
+
+
+def _select_option_from_dossiers(
+    dossiers: dict[str, dict[str, object]],
+    *,
+    min_top_score: float = 2.0,
+    min_margin: float = 1.5,
+) -> str | None:
+    if not dossiers:
+        return None
+    ranking = sorted(
+        ((label, float(row.get("dossier_score", 0.0))) for label, row in dossiers.items()),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if not ranking:
+        return None
+    top_label, top_score = ranking[0]
+    if top_score < min_top_score:
+        return None
+    if len(ranking) == 1:
+        return top_label
+    margin = top_score - ranking[1][1]
+    if margin < min_margin:
+        return None
+    return top_label
+
+
 def _clean_segments(segments: list[str], question: str) -> list[str]:
     stem, _ = _split_question_and_choices(question)
     cleaned: list[str] = []
@@ -413,6 +509,214 @@ def _build_option_hypothesis_queries(stem: str, answer_choices: dict[str, str], 
         queries.append(f"{stem} {choice}")
         queries.append(f"{stem} evidence for {choice}")
     return _dedupe_queries(queries, max_items=max_items)
+
+
+def _candidate_option_labels_for_falsification(
+    stem: str,
+    answer_choices: dict[str, str],
+    max_options: int = 2,
+) -> list[str]:
+    if not answer_choices:
+        return []
+    stem_tokens = set(_tokenize(stem))
+    ranked: list[tuple[float, str]] = []
+    for label, choice in sorted(answer_choices.items()):
+        tokens = set(_tokenize(choice))
+        overlap = len(tokens & stem_tokens)
+        specificity = len(tokens)
+        score = (2.0 * overlap) + (0.2 * specificity)
+        ranked.append((score, label))
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    cap = max(1, max_options)
+    return [label for _, label in ranked[:cap]]
+
+
+def _build_falsification_queries(
+    stem: str,
+    answer_choices: dict[str, str],
+    segments: list[str],
+    max_items: int = 10,
+) -> list[str]:
+    queries: list[str] = []
+    if answer_choices:
+        max_options = _env_int("SPARKIT_FALSIFICATION_MAX_OPTIONS", 2, minimum=1)
+        selected_labels = _candidate_option_labels_for_falsification(stem, answer_choices, max_options=max_options)
+        for label in selected_labels:
+            choice = answer_choices.get(label, "")
+            if not choice.strip():
+                continue
+            queries.append(f"{stem} evidence against {choice}")
+            queries.append(f"{stem} why {choice} is incorrect")
+            queries.append(f"{choice} contradictory findings")
+    else:
+        for segment in segments[:3]:
+            if not segment.strip():
+                continue
+            queries.append(f"{segment} contradictory findings")
+            queries.append(f"{segment} failed replication")
+            queries.append(f"{segment} null results")
+    return _dedupe_queries(queries, max_items=max_items)
+
+
+def _semantic_rerank_records(
+    question: str,
+    records: list[LiteratureRecord],
+    provider: str,
+    top_k: int,
+) -> list[LiteratureRecord]:
+    if not records:
+        return []
+    capped = records[: max(1, min(len(records), _env_int("SPARKIT_SEMANTIC_RERANK_CANDIDATES", 18, minimum=3)))]
+    lines = []
+    for idx, rec in enumerate(capped, start=1):
+        abstract = " ".join((rec.abstract or "").split())
+        if len(abstract) > 420:
+            abstract = abstract[:420] + "..."
+        lines.append(f"{idx}. {rec.title} | {abstract}")
+    prompt = (
+        "Rank the following papers by how directly they answer the STEM question.\n"
+        "Return only one line in this format: indices: i1 | i2 | i3 ...\n"
+        f"Question: {question}\n\n"
+        "Papers:\n"
+        + "\n".join(lines)
+    )
+    result = generate_text(provider, prompt, max_tokens=180)
+    if not result.success or not result.text.strip():
+        return capped[:top_k]
+    match = re.search(r"indices\s*:\s*(.+)", result.text, flags=re.IGNORECASE)
+    raw = match.group(1) if match else result.text
+    ordered_idxs: list[int] = []
+    for piece in raw.split("|"):
+        token = piece.strip()
+        if not token:
+            continue
+        number = re.search(r"\b(\d+)\b", token)
+        if not number:
+            continue
+        idx = int(number.group(1))
+        if 1 <= idx <= len(capped) and idx not in ordered_idxs:
+            ordered_idxs.append(idx)
+    ranked: list[LiteratureRecord] = []
+    for idx in ordered_idxs:
+        ranked.append(capped[idx - 1])
+        if len(ranked) >= top_k:
+            break
+    if len(ranked) < top_k:
+        seen = {_record_identity(item) for item in ranked}
+        for rec in capped:
+            rid = _record_identity(rec)
+            if rid in seen:
+                continue
+            ranked.append(rec)
+            seen.add(rid)
+            if len(ranked) >= top_k:
+                break
+    return ranked
+
+
+def _semantic_rerank_enabled_for_stage(stage_name: str) -> bool:
+    raw = os.getenv(
+        "SPARKIT_SEMANTIC_RERANK_STAGES",
+        "retrieval_round_2_gap_fill,retrieval_round_3_adversarial,retrieval_round_4_falsification",
+    )
+    stage_set = {item.strip() for item in raw.split(",") if item.strip()}
+    return stage_name in stage_set
+
+
+def _build_claim_gap_queries(
+    question: str,
+    stage_name: str,
+    records: list[LiteratureRecord],
+    planning_provider: str,
+    max_items: int = 4,
+) -> list[str]:
+    if not records:
+        return []
+    evidence_lines: list[str] = []
+    for idx, rec in enumerate(records[:6], start=1):
+        abstract = " ".join((rec.abstract or "").split())
+        if len(abstract) > 260:
+            abstract = abstract[:260] + "..."
+        evidence_lines.append(f"{idx}. {rec.title} | {abstract}")
+    prompt = (
+        "You are planning the next retrieval step for STEM QA.\n"
+        "Given the question and current evidence, infer unresolved claim gaps.\n"
+        "Return one line only:\n"
+        "queries: query1 | query2 | query3 | query4\n"
+        "Rules: concise, technical, scholarly-search friendly, no explanations.\n\n"
+        f"Question: {question}\n"
+        f"Current stage: {stage_name}\n"
+        "Evidence snippets:\n"
+        + "\n".join(evidence_lines)
+    )
+    result = generate_text(planning_provider, prompt, max_tokens=220)
+    if not result.success or not result.text.strip():
+        return _dedupe_queries(
+            [
+                f"{question} unresolved mechanism evidence",
+                f"{question} contradictory findings",
+                f"{question} benchmark comparison",
+            ],
+            max_items=max_items,
+        )
+    match = re.search(r"queries\s*:\s*(.+)", result.text, flags=re.IGNORECASE)
+    blob = match.group(1) if match else result.text
+    items = [item.strip() for item in blob.split("|") if item.strip()]
+    return _dedupe_queries(items, max_items=max_items)
+
+
+def _should_inject_claim_gap(
+    *,
+    stage_idx: int,
+    total_stages: int,
+    new_unique_docs: int,
+    stage_avg_relevance: float,
+    elapsed_s: float,
+    spent_usd: float,
+    max_latency_s: int | None,
+    max_cost_usd: float,
+) -> tuple[bool, str]:
+    if stage_idx >= total_stages:
+        return False, "no_next_stage"
+    if not _env_bool("SPARKIT_ENABLE_CLAIM_GAP_LOOP", True):
+        return False, "disabled"
+
+    force = _env_bool("SPARKIT_CLAIM_GAP_FORCE", False)
+    require_low = _env_bool("SPARKIT_CLAIM_GAP_REQUIRE_LOW_EVIDENCE", True)
+    min_new_docs_trigger = _env_int("SPARKIT_CLAIM_GAP_MIN_NEW_DOCS_TRIGGER", 2, minimum=0)
+    min_relevance_trigger = _env_float("SPARKIT_CLAIM_GAP_MIN_RELEVANCE_TRIGGER", 1.2, minimum=0.0)
+    max_cost_ratio = _env_float("SPARKIT_CLAIM_GAP_MAX_COST_RATIO", 0.7, minimum=0.0)
+    max_latency_ratio = _env_float("SPARKIT_CLAIM_GAP_MAX_LATENCY_RATIO", 0.7, minimum=0.0)
+
+    if not force:
+        if max_cost_usd > 0 and (spent_usd / max_cost_usd) >= max_cost_ratio:
+            return False, "cost_headroom_low"
+        if max_latency_s and max_latency_s > 0 and (elapsed_s / max_latency_s) >= max_latency_ratio:
+            return False, "latency_headroom_low"
+
+    low_evidence = (new_unique_docs <= min_new_docs_trigger) or (stage_avg_relevance <= min_relevance_trigger)
+    if require_low and not low_evidence and not force:
+        return False, "evidence_sufficient"
+    return True, "inject"
+
+
+def _extract_chemistry_entities(question: str, max_items: int = 6) -> list[str]:
+    # Capture high-signal chemistry entities (formulae, hyphenated compounds, and key suffix terms).
+    formulae = re.findall(r"\b(?:[A-Z][a-z]?\d*){2,}\b", question)
+    hyphenated = re.findall(r"\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+){1,}\b", question)
+    suffix_terms = re.findall(r"\b[A-Za-z][A-Za-z0-9-]*(?:ane|ene|yne|ol|one|acid|amide|ester|ketone)\b", question, flags=re.IGNORECASE)
+    candidates = [*formulae, *hyphenated, *suffix_terms]
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in candidates:
+        normalized = token.strip(".,;:()[]{}").lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(token.strip(".,;:()[]{}"))
+        if len(out) >= max_items:
+            break
+    return out
 
 
 def _extract_lexical_anchors(question: str, max_items: int = 10) -> list[str]:
@@ -547,6 +851,22 @@ def _heuristic_retrieval_plan(question: str, research_plan: ResearchPlan | None 
         intent_queries["methods"] = _dedupe_queries([*intent_queries["methods"], f"{segment} methods"], max_items=6)
     if option_queries:
         intent_queries["primary"] = _dedupe_queries([*intent_queries["primary"], *option_queries], max_items=10)
+    chemistry_mode = (research_plan.task_type if research_plan else _infer_task_type(question)) == "mechanism" or "reaction" in stem.lower()
+    if chemistry_mode:
+        chem_entities = _extract_chemistry_entities(stem, max_items=6)
+        for entity in chem_entities:
+            intent_queries["primary"] = _dedupe_queries(
+                [*intent_queries["primary"], f"{entity} mechanism evidence", f"{entity} product selectivity"],
+                max_items=10,
+            )
+            intent_queries["methods"] = _dedupe_queries(
+                [*intent_queries["methods"], f"{entity} catalyst conditions", f"{entity} reaction protocol"],
+                max_items=8,
+            )
+            intent_queries["adversarial"] = _dedupe_queries(
+                [*intent_queries["adversarial"], f"{entity} contradictory mechanism", f"{entity} failed replication"],
+                max_items=8,
+            )
     focus_terms = _dedupe_queries([*anchors, *segments, *answer_choices.values()], max_items=14)
     return RetrievalPlan(
         segments=segments,
@@ -690,12 +1010,25 @@ def _build_round_queries_from_plan(mode: str, question: str, plan: RetrievalPlan
             ("retrieval_reference", plan.intent_queries["reference"]),
         ]
     option_queries = _dedupe_queries(plan.intent_queries.get("options", []), max_items=8)
-    return [
+    rounds = [
         ("retrieval_round_1", primary_queries),
         ("retrieval_round_option_hypotheses", option_queries),
         ("retrieval_round_2_gap_fill", _dedupe_queries([*plan.intent_queries["methods"], *plan.intent_queries["reference"]], max_items=8)),
         ("retrieval_round_3_adversarial", plan.intent_queries["adversarial"]),
     ]
+    if _env_bool("SPARKIT_ENABLE_FALSIFICATION_ROUND", True):
+        rounds.append(
+            (
+                "retrieval_round_4_falsification",
+                _build_falsification_queries(
+                    stem=question,
+                    answer_choices=plan.answer_choices,
+                    segments=plan.segments,
+                    max_items=_env_int("SPARKIT_FALSIFICATION_MAX_QUERIES", 10, minimum=4),
+                ),
+            )
+        )
+    return rounds
 
 
 def _record_identity(record: LiteratureRecord) -> str:
@@ -967,7 +1300,7 @@ def _build_mcq_option_judge_prompt(
     claim_texts: list[str],
     claim_clusters: list[dict[str, object]] | None = None,
     section_summaries: list[dict[str, str]] | None = None,
-    option_evidence_packs: dict[str, list[str]] | None = None,
+    option_evidence_packs: dict[str, object] | None = None,
 ) -> str:
     stem, _ = _split_question_and_choices(question)
     choices_block = "\n".join(f"{label}. {text}" for label, text in sorted(answer_choices.items()))
@@ -982,8 +1315,9 @@ def _build_mcq_option_judge_prompt(
     option_pack_lines: list[str] = []
     for label, text in sorted(answer_choices.items()):
         pack = (option_evidence_packs or {}).get(label, [])
-        evidence = " | ".join(pack[:3]) if pack else "no focused snippets"
-        option_pack_lines.append(f"- {label}. {text} -> {evidence}")
+        support = " | ".join((pack.get("support_snippets", []) if isinstance(pack, dict) else pack)[:3]) if pack else "no support snippets"
+        counter = " | ".join((pack.get("counter_snippets", []) if isinstance(pack, dict) else [])[:2]) if isinstance(pack, dict) else ""
+        option_pack_lines.append(f"- {label}. {text}\n  support: {support}\n  counter: {counter or 'none'}")
     option_pack_block = "\n".join(option_pack_lines)
     return (
         "You are a rigorous STEM MCQ adjudicator.\n"
@@ -1011,7 +1345,7 @@ def _build_mcq_option_scoring_prompt(
     claim_texts: list[str],
     claim_clusters: list[dict[str, object]] | None = None,
     section_summaries: list[dict[str, str]] | None = None,
-    option_evidence_packs: dict[str, list[str]] | None = None,
+    option_evidence_packs: dict[str, object] | None = None,
 ) -> str:
     stem, _ = _split_question_and_choices(question)
     choices_block = "\n".join(f"{label}. {text}" for label, text in sorted(answer_choices.items()))
@@ -1026,8 +1360,9 @@ def _build_mcq_option_scoring_prompt(
     option_pack_lines: list[str] = []
     for label, text in sorted(answer_choices.items()):
         pack = (option_evidence_packs or {}).get(label, [])
-        evidence = " | ".join(pack[:3]) if pack else "no focused snippets"
-        option_pack_lines.append(f"- {label}. {text} -> {evidence}")
+        support = " | ".join((pack.get("support_snippets", []) if isinstance(pack, dict) else pack)[:3]) if pack else "no support snippets"
+        counter = " | ".join((pack.get("counter_snippets", []) if isinstance(pack, dict) else [])[:2]) if isinstance(pack, dict) else ""
+        option_pack_lines.append(f"- {label}. {text}\n  support: {support}\n  counter: {counter or 'none'}")
     option_pack_block = "\n".join(option_pack_lines)
     return (
         "You are a strict STEM MCQ evidence scorer.\n"
@@ -1050,6 +1385,53 @@ def _build_mcq_option_scoring_prompt(
         "Evidence:\n"
         f"{evidence_lines}\n"
     )
+
+
+def _build_mcq_option_elimination_prompt(
+    question: str,
+    answer_choices: dict[str, str],
+    claim_texts: list[str],
+    option_dossiers: dict[str, object] | None = None,
+) -> str:
+    stem, _ = _split_question_and_choices(question)
+    choices_block = "\n".join(f"{label}. {text}" for label, text in sorted(answer_choices.items()))
+    evidence_lines = "\n".join(f"- {claim}" for claim in claim_texts[:12]) or "- No evidence lines available."
+    dossier_lines: list[str] = []
+    for label, text in sorted(answer_choices.items()):
+        row = (option_dossiers or {}).get(label, {})
+        if isinstance(row, dict):
+            support = " | ".join((row.get("support_snippets") or [])[:2]) or "none"
+            counter = " | ".join((row.get("counter_snippets") or [])[:2]) or "none"
+            dossier_lines.append(f"- {label}. {text}\n  support: {support}\n  counter: {counter}")
+    dossier_block = "\n".join(dossier_lines) or "- No option dossiers available."
+    return (
+        "You are a strict STEM MCQ eliminator.\n"
+        "Mark each option as KEEP or ELIMINATE based only on evidence.\n"
+        "If uncertain, prefer KEEP over ELIMINATE.\n"
+        "Return exactly one line per option in this format:\n"
+        "A: KEEP\n"
+        "B: ELIMINATE\n"
+        "No extra text.\n\n"
+        f"Question stem: {stem}\n"
+        "Answer choices:\n"
+        f"{choices_block}\n\n"
+        "Option dossiers:\n"
+        f"{dossier_block}\n"
+        "Evidence:\n"
+        f"{evidence_lines}\n"
+    )
+
+
+def _parse_mcq_option_elimination(text: str, answer_choices: dict[str, str]) -> dict[str, str]:
+    decisions: dict[str, str] = {}
+    if not text.strip():
+        return decisions
+    for label in sorted(answer_choices.keys()):
+        match = re.search(rf"(?:^|\n)\s*{re.escape(label)}\s*:\s*(KEEP|ELIMINATE)\b", text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        decisions[label] = match.group(1).upper()
+    return decisions
 
 
 def _ensemble_agreement(drafts: list[str]) -> float:
@@ -1198,7 +1580,8 @@ def execute_orchestration(
     seen_record_ids: set[str] = set()
     prev_selected_quality = 0.0
 
-    for stage_idx, (stage_name, queries) in enumerate(rounds, start=1):
+    mutable_rounds = [(name, list(queries)) for name, queries in rounds]
+    for stage_idx, (stage_name, queries) in enumerate(mutable_rounds, start=1):
         elapsed_s = (datetime.now(timezone.utc) - started).total_seconds()
         reserve = estimate_stage_cost("retrieval", units=len(queries))
         if should_stop_early(BudgetState(elapsed_s=elapsed_s, spent_usd=spent_usd), max_latency_s, max_cost_usd, reserve):
@@ -1228,6 +1611,16 @@ def execute_orchestration(
             stage_brave_requests += int((stats.get("requests_by_source") or {}).get("brave_web", 0))
 
         deduped_stage = _dedupe_records(stage_records)
+        semantic_rerank_enabled = _env_bool("SPARKIT_ENABLE_SEMANTIC_RERANK", False)
+        if semantic_rerank_enabled and _semantic_rerank_enabled_for_stage(stage_name) and deduped_stage:
+            rerank_query = queries[0] if queries else question
+            rerank_top_k = min(len(deduped_stage), effort.retrieval_min_results)
+            deduped_stage = _semantic_rerank_records(
+                question=f"{question}\nFocused query: {rerank_query}",
+                records=deduped_stage,
+                provider=provider_plan.retrieval,
+                top_k=rerank_top_k,
+            )
         records_by_round[stage_name] = deduped_stage
         all_records.extend(deduped_stage)
         aggregate_errors.update(stage_errors)
@@ -1268,6 +1661,7 @@ def execute_orchestration(
                     "queries": queries,
                     "documents_retrieved": len(deduped_stage),
                     "new_unique_docs": new_unique_docs,
+                    "semantic_reranked": bool(semantic_rerank_enabled and _semantic_rerank_enabled_for_stage(stage_name)),
                     "source_errors": stage_errors,
                     "brave_requests": stage_brave_requests,
                     "brave_cost_usd": stage_brave_cost,
@@ -1275,6 +1669,72 @@ def execute_orchestration(
                 },
             )
         )
+        stage_avg_relevance = _avg_relevance(
+            question=question,
+            records=deduped_stage,
+            boost_terms=retrieval_plan.focus_terms if retrieval_plan else None,
+        )
+        elapsed_after_stage_s = (datetime.now(timezone.utc) - started).total_seconds()
+        gap_allowed, gap_reason = _should_inject_claim_gap(
+            stage_idx=stage_idx,
+            total_stages=len(mutable_rounds),
+            new_unique_docs=new_unique_docs,
+            stage_avg_relevance=stage_avg_relevance,
+            elapsed_s=elapsed_after_stage_s,
+            spent_usd=spent_usd,
+            max_latency_s=max_latency_s,
+            max_cost_usd=max_cost_usd,
+        )
+        stages.append(
+            TraceStage(
+                name="retrieval_claim_gap_gate",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "stage": stage_name,
+                    "stage_idx": stage_idx,
+                    "new_unique_docs": new_unique_docs,
+                    "stage_avg_relevance": stage_avg_relevance,
+                    "elapsed_s": elapsed_after_stage_s,
+                    "spent_usd": spent_usd,
+                    "reason": gap_reason,
+                    "enabled": gap_allowed,
+                },
+            )
+        )
+        if gap_allowed and stage_idx < len(mutable_rounds):
+            gap_queries = _build_claim_gap_queries(
+                question=question,
+                stage_name=stage_name,
+                records=deduped_stage,
+                planning_provider=provider_plan.planning,
+                max_items=_env_int("SPARKIT_CLAIM_GAP_MAX_QUERIES", 4, minimum=1),
+            )
+            if gap_queries:
+                next_stage_name, next_stage_queries = mutable_rounds[stage_idx]
+                merged_next = _dedupe_queries(
+                    [*next_stage_queries, *gap_queries],
+                    max_items=_env_int("SPARKIT_CLAIM_GAP_MAX_NEXT_QUERIES", 12, minimum=4),
+                )
+                mutable_rounds[stage_idx] = (next_stage_name, merged_next)
+                stages.append(
+                    TraceStage(
+                        name="retrieval_claim_gap_loop",
+                        status=Status.COMPLETED,
+                        model=provider_plan.planning,
+                        started_at=datetime.now(timezone.utc),
+                        ended_at=datetime.now(timezone.utc),
+                        artifacts={
+                            "from_stage": stage_name,
+                            "to_stage": next_stage_name,
+                            "injected_queries": gap_queries,
+                            "injected_count": len(gap_queries),
+                            "next_stage_query_count_after_merge": len(merged_next),
+                        },
+                    )
+                )
         if adaptive_retrieval:
             if stage_idx >= adaptive_max_rounds:
                 budget_stop_reason = budget_stop_reason or f"adaptive stop after {stage_name}: max rounds reached"
@@ -1340,6 +1800,31 @@ def execute_orchestration(
         target_docs=effort.ingestion_target_docs,
         boost_terms=retrieval_plan.focus_terms if retrieval_plan else None,
     )
+    final_semantic_rerank = _env_bool(
+        "SPARKIT_ENABLE_SEMANTIC_RERANK_FINAL",
+        _env_bool("SPARKIT_ENABLE_SEMANTIC_RERANK", False),
+    )
+    if final_semantic_rerank:
+        selected_records = _semantic_rerank_records(
+            question=question,
+            records=selected_records,
+            provider=provider_plan.retrieval,
+            top_k=effort.ingestion_target_docs,
+        )
+        stages.append(
+            TraceStage(
+                name="retrieval_semantic_rerank",
+                status=Status.COMPLETED,
+                model=provider_plan.retrieval,
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "enabled": True,
+                    "selected_docs_after_rerank": len(selected_records),
+                    "candidates_cap": _env_int("SPARKIT_SEMANTIC_RERANK_CANDIDATES", 18, minimum=3),
+                },
+            )
+        )
     evidence_store = EvidenceStore()
 
     citations: list[Citation] = []
@@ -1397,11 +1882,14 @@ def execute_orchestration(
         )
 
     adversarial_stage_name = "retrieval_adversarial" if mode == Mode.RESEARCH_MAX.value else "retrieval_round_3_adversarial"
+    verifier_records = list(records_by_round.get(adversarial_stage_name, []))
+    verifier_records.extend(records_by_round.get("retrieval_round_4_falsification", []))
+    verifier_records = _dedupe_records(verifier_records)
     verifier_start = datetime.now(timezone.utc)
     depth = contradiction_depth_from_budget(max_cost_usd=max_cost_usd, max_latency_s=max_latency_s) + effort.contradiction_depth_bonus
     verifier_result = run_verifier(
         claim_ids=list(base_claim_conf.keys()),
-        adversarial_records=records_by_round.get(adversarial_stage_name, []),
+        adversarial_records=verifier_records,
         depth=depth,
         top_k=5,
     )
@@ -1411,7 +1899,7 @@ def execute_orchestration(
         StageMetric(
             name="verification",
             duration_ms=int((datetime.now(timezone.utc) - verifier_start).total_seconds() * 1000),
-            documents_retrieved=len(records_by_round.get(adversarial_stage_name, [])),
+            documents_retrieved=len(verifier_records),
             source_errors=0,
             estimated_cost_usd=verifier_cost,
         )
@@ -1428,6 +1916,8 @@ def execute_orchestration(
                 "notes": verifier_result.notes,
                 "ranked_contradictions": verifier_result.ranked_contradictions,
                 "depth": depth,
+                "adversarial_stage_name": adversarial_stage_name,
+                "falsification_docs_used": len(records_by_round.get("retrieval_round_4_falsification", [])),
             },
         )
     )
@@ -1520,13 +2010,37 @@ def execute_orchestration(
                 claim_texts=claim_texts,
                 top_k=4,
             )
+            option_dossiers = _build_option_dossiers(
+                stem=stem_question,
+                answer_choices=answer_choices,
+                claim_texts=claim_texts,
+                section_summaries=section_summaries,
+                top_k=4,
+            )
+            elimination_prompt = _build_mcq_option_elimination_prompt(
+                question=stem_question,
+                answer_choices=answer_choices,
+                claim_texts=claim_texts,
+                option_dossiers=option_dossiers,
+            )
+            elimination_result = generate_text(
+                provider_plan.synthesis,
+                elimination_prompt,
+                max_tokens=min(220, synthesis_token_budget or 220),
+            )
+            elimination_decisions = _parse_mcq_option_elimination(elimination_result.text or "", answer_choices)
+            allowed_labels = [
+                label for label in sorted(answer_choices.keys()) if elimination_decisions.get(label, "KEEP") != "ELIMINATE"
+            ]
+            if not allowed_labels:
+                allowed_labels = sorted(answer_choices.keys())
             scorer_prompt = _build_mcq_option_scoring_prompt(
                 question=stem_question,
                 answer_choices=answer_choices,
                 claim_texts=claim_texts,
                 claim_clusters=claim_clusters,
                 section_summaries=section_summaries,
-                option_evidence_packs=option_evidence_packs,
+                option_evidence_packs=option_dossiers,
             )
             scorer_result = generate_text(
                 provider_plan.synthesis,
@@ -1552,11 +2066,16 @@ def execute_orchestration(
                     "blended": blended,
                 }
             selected_letter: str | None = None
-            if blended_scores and len({round(row["blended"], 6) for row in blended_scores.values()}) > 1:
+            dossier_pool = {label: row for label, row in option_dossiers.items() if label in allowed_labels}
+            blended_pool = {label: row for label, row in blended_scores.items() if label in allowed_labels}
+            dossier_selected = _select_option_from_dossiers(dossier_pool)
+            if dossier_selected and dossier_selected in answer_choices:
+                selected_letter = dossier_selected
+            if blended_pool and len({round(row["blended"], 6) for row in blended_pool.values()}) > 1:
                 min_margin = float(os.getenv("SPARKIT_MCQ_BLEND_MARGIN", "0.06"))
                 min_top_score = float(os.getenv("SPARKIT_MCQ_BLEND_MIN_TOP", "0.02"))
                 selected_letter = _select_confident_blended_option(
-                    blended_scores=blended_scores,
+                    blended_scores=blended_pool,
                     min_margin=min_margin,
                     min_top_score=min_top_score,
                 )
@@ -1585,7 +2104,12 @@ def execute_orchestration(
                             "option_scores": parsed_scores,
                             "lexical_scores": lexical_scores,
                             "blended_scores": blended_scores,
+                            "allowed_labels": allowed_labels,
+                            "elimination_decisions": elimination_decisions,
+                            "elimination_raw_output": (elimination_result.text or "")[:1200],
                             "option_evidence_packs": option_evidence_packs,
+                            "option_dossiers": option_dossiers,
+                            "dossier_selected": dossier_selected,
                             "scorer_raw_output": (scorer_result.text or "")[:2000],
                         },
                     )
@@ -1600,13 +2124,13 @@ def execute_orchestration(
                     claim_texts=claim_texts,
                     claim_clusters=claim_clusters,
                     section_summaries=section_summaries,
-                    option_evidence_packs=option_evidence_packs,
+                    option_evidence_packs=option_dossiers,
                 )
                 judge_result = generate_text(
                     provider_plan.synthesis, judge_prompt, max_tokens=min(220, synthesis_token_budget or 220)
                 )
                 selected_letter = _extract_answer_letter(judge_result.text or "")
-                if judge_result.success and selected_letter and selected_letter in answer_choices:
+                if judge_result.success and selected_letter and selected_letter in allowed_labels:
                     draft = f"<answer>{selected_letter}</answer>"
                     draft_texts.append(draft)
                     _record_gen_usage(
@@ -1624,7 +2148,13 @@ def execute_orchestration(
                             model=provider_plan.synthesis,
                             started_at=datetime.now(timezone.utc),
                             ended_at=datetime.now(timezone.utc),
-                            artifacts={"selected_option": selected_letter, "num_choices": len(answer_choices)},
+                            artifacts={
+                                "selected_option": selected_letter,
+                                "num_choices": len(answer_choices),
+                                "allowed_labels": allowed_labels,
+                                "elimination_decisions": elimination_decisions,
+                                "option_dossiers": option_dossiers,
+                            },
                         )
                     )
                 else:
