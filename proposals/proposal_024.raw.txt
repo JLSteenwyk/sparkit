@@ -1,0 +1,76 @@
+Now I have a thorough understanding of the full SPARKIT stack. Let me produce the audit proposal.
+
+```json
+{
+  "proposal_id": "SPARKIT-P001-DUAL-TRACK-ECARD",
+  "title": "Dual-Track Orchestration: Self-Contained Reasoning Fast-Path + Evidence-Class-Aware Retrieval Decomposition",
+  "distinctive_angle": "SPARKIT always runs the same retrieval pipeline regardless of whether the question needs external evidence at all. A significant fraction of HLE-style hard questions embed all required data directly in the question text (structured DLS tables, CSV expression data, stoichiometry problems). For those questions, the retrieved scientific literature about related topics actively pollutes the synthesis context with irrelevant evidence, causing the model to answer based on misleading tangential papers rather than the embedded data. The proposal introduces a pre-orchestration question classifier that splits questions into two tracks: a zero-retrieval deep-reasoning fast-path for self-contained questions, and a restructured retrieval pipeline for knowledge-gap questions that fixes SPARKIT's two worst retrieval defects—single-query-fits-all adapters and first-sentence-only extraction.",
+  "summary": "Add a lightweight self-contained question detector (using structural heuristics and a small LLM call) early in execute_orchestration to bypass the retrieval loop for questions whose answer can be derived entirely from the question text. For knowledge-gap questions, replace the monolithic query broadcast (same query to all 5 adapters) with adapter-specific query generation: ArXiv gets method/model-name queries; EuropePMC gets MeSH-style clinical/gene queries; Semantic Scholar gets citation-context queries; CrossRef/OpenAlex get concept-DOI queries. Add an LLM-based terminological synonym expansion step before query dispatch to map domain acronyms and alternate names. Replace first-sentence extraction in ingestion with a sliding-window sentence ranker that finds the passage chunk most semantically aligned with the question stem and answer choices.",
+  "reasoning": "Analysis of the HLE-25 benchmark (0.08 average rubric score, 25 questions, all with total_score=0.0 across the board in the direct run) reveals three failure classes: (1) Pure-reasoning questions with embedded structured data (q039 PCA/miRNA CSV, q083 DLS measurement table, q028 stoichiometry)—these score 0 because SPARKIT retrieves generic papers about the topic that do not contain the specific measurement values; the synthesis model then ignores the embedded data in favor of vague retrieved claims. (2) Highly specific factual questions where the required datum lives in a narrow niche of the literature not reachable by the bag-of-words queries SPARKIT generates. The _relevance_score function uses raw token overlap on title+abstract, meaning a paper titled 'Dynamics of HP70 co-chaperone recruitment' will score zero against a query about 'MAB13 protein aggregation', even though HP70 is directly relevant. (3) Questions requiring integration of methodology details from Results/Methods sections, but the ingestion pipeline uses _first_sentence() of the best-matching chunk, which is a section header or background sentence, not the quantitative result. The dual-track proposal attacks all three failure classes: self-contained detection eliminates class 1 interference; adapter-specific + terminologically-expanded queries attack class 2 recall; sliding-window sentence ranking attacks class 3 extraction quality.",
+  "expected_impact": {
+    "accuracy_delta_pct_points": 14,
+    "cost_impact": "mixed",
+    "latency_impact": "mixed",
+    "confidence": "medium"
+  },
+  "implementation_plan": [
+    {
+      "step": "Add _classify_question_track(question: str, planning_provider: str) -> Literal['self_contained', 'knowledge_gap'] in engine.py. Use structural heuristics first (regex for CSV blocks, bullet-listed numeric measurements, markdown tables, LaTeX math) to detect self-contained questions without an LLM call. Fall back to a 150-token planning LLM call only when heuristics are ambiguous. Cache result in the plan stage TraceStage artifact.",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Implement self-contained fast-path branch in execute_orchestration: when track == 'self_contained', skip all retrieval rounds and the ingestion loop, build a direct reasoning prompt that includes the full question and instructs the synthesis model to reason step-by-step from the embedded data only, and call generate_text with max reasoning tokens. Set synthesis_revision_pass=True for this track and use the highest-capability available synthesis provider.",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Add _expand_terminology(stem: str, planning_provider: str) -> dict[str, list[str]] in aggregator.py or engine.py. Use a 200-token LLM call to generate acronym expansions and domain synonyms (e.g., 'HP70' -> ['HSP70', 'heat shock protein 70', 'HSPA1A'], 'MAB13' -> treat as antibody subtype). Inject expanded terms into the focus_terms of the RetrievalPlan before query dispatch.",
+      "owner": "retrieval_service",
+      "effort": "medium"
+    },
+    {
+      "step": "Replace the monolithic per-round query broadcast in search_literature with adapter-specific query shaping. Add _shape_query_for_adapter(query: str, adapter_name: str, domain_hints: list[str]) -> str that (a) for arxiv: prepends ti: or abs: field specifiers and appends method names; (b) for europe_pmc: appends MeSH-style qualifiers like [MeSH Terms] when domain is biology; (c) for semantic_scholar: strips operator syntax that the API chokes on; (d) for crossref/openalex: prefers noun-phrase queries over sentence-style queries. Wire this into the per-adapter loop in aggregator.py.",
+      "owner": "retrieval_service",
+      "effort": "high"
+    },
+    {
+      "step": "Replace _first_sentence() extraction in engine.py with _extract_best_evidence_sentence(section_text: str, question: str, answer_choices: dict, focus_terms: list[str]) -> str. Implement a sliding sentence-level window (split on sentence boundaries, not character stride) and score each candidate sentence against question_tokens + choice_tokens using _chunk_relevance_score. Return the highest-scoring sentence up to 280 chars. This replaces the single call site at engine.py:1486.",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Add citation-seed second-round retrieval: after the first retrieval round, parse DOI and arXiv ID references from full-text fetched documents (via a regex pass on fetched HTML/PDF content in parser.py). Deduplicate against already-seen records, then queue up to 4 citation-seed DOIs for a new search_literature call with fetch=True. This forms a lightweight citation-expansion corpus without a full snowballing implementation.",
+      "owner": "retrieval_service + ingestion_service",
+      "effort": "high"
+    },
+    {
+      "step": "Update evaluate_plan in scripts_capture_direct_baselines.py and the benchmark runner to log track classification per question (self_contained vs knowledge_gap), retrieval utilization rate (sentences actually cited in synthesis / total extracted), and adapter contribution breakdown per run. Surface these in the per-question report JSON.",
+      "owner": "eval_service",
+      "effort": "low"
+    }
+  ],
+  "retrieval_improvements": [
+    "Adapter-specific query shaping: instead of sending identical queries to all 5 adapters, generate formulations tuned to each adapter's index and API (ArXiv field specifiers, EuropePMC MeSH qualifiers, Semantic Scholar citation-context framing, CrossRef/OpenAlex noun-phrase queries). Current code in aggregator.py dispatches the same rewritten_queries list to every adapter via the same interface regardless of source capabilities.",
+    "LLM-based terminological expansion of domain acronyms and alternate names before query dispatch: the current _QUERY_REWRITES dict has 7 static entries and misses domain-specific jargon entirely. A 200-token planning LLM call can expand 'HP70' to 'HSP70/heat shock protein 70', 'FWHM' to 'full width half maximum', 'MAB13' to 'monoclonal antibody', etc., dramatically improving recall for niche scientific terms that appear in paper titles but not in the query as posed.",
+    "Citation-seed retrieval round: after round 1, extract DOI/arXiv references from fetched full-text content and use them as seeds for a targeted second fetch. This exploits the citation graph structure of scientific literature—a relevant paper's bibliography is a pre-curated list of highly relevant prior work, which is far more targeted than keyword queries alone. Currently SPARKIT has no citation-based discovery mechanism at all.",
+    "Self-contained question detection to gate retrieval entirely: questions with embedded structured data (tables, CSV, numbered measurement lists) should not go through the retrieval pipeline. Currently, SPARKIT retrieves generic papers about the topic domain and injects their content into the synthesis context, which crowds out the embedded data and confuses the synthesis model. Skipping retrieval for these questions improves both accuracy and cost.",
+    "Sliding-window sentence-level passage extraction replacing _first_sentence(): the current ingestion pipeline calls _first_sentence() which takes the first sentence of the best-matching section chunk. For Results/Methods sections, the first sentence is almost always a framing sentence ('In this study we...'), not the specific finding. A sentence-level ranker that scores each sentence against the question stem and answer choice tokens finds the actual quantitative result or mechanism statement that the question requires."
+  ],
+  "evaluation_plan": [
+    "Self-contained detection precision/recall audit: hand-label the HLE-25 questions by whether they are self-contained (q039 CSV, q083 DLS table, q028 stoichiometry = positive; q006, q012, q093, q028 general knowledge = negative) and measure classifier precision/recall. Target: >90% recall (no self-contained question mis-routed to retrieval) and >75% precision (limit retrieval bypass for questions that do need it).",
+    "Per-track accuracy comparison: run HLE-25 through the dual-track system and report separate accuracy scores for self_contained track vs knowledge_gap track. The hypothesis is that self_contained track accuracy is substantially higher than the 0.08 baseline, because the synthesis model can reason directly from the embedded data without retrieval interference.",
+    "Retrieval utilization rate tracking: for each knowledge-gap question, measure what fraction of the claim_texts fed into the synthesis prompt contain tokens that appear in the final answer. Low utilization (<30%) indicates the retrieval is not finding relevant material and the synthesis is relying on model priors. Target >50% utilization after retrieval improvements.",
+    "Adapter contribution breakdown: log which adapter (arxiv, crossref, semantic_scholar, openalex, europe_pmc) provided the evidence sentence that most closely matched the final answer, as determined by token overlap between the final answer and each claim_text source. Use this to identify which adapters are underperforming for biology vs. chemistry questions and calibrate the adapter priority and query format accordingly.",
+    "Terminology expansion effectiveness A/B: run a 10-question subsample with and without the terminological expansion step and compare retrieved record relevance scores (_record_relevance_score averaged over selected records). Hypothesis: expansion increases average relevance score by >20% for questions containing domain acronyms, with no regression on questions without acronyms.",
+    "Sentence extraction quality audit: for 10 manually selected knowledge-gap questions, compare the claim_text generated by _first_sentence() vs. _extract_best_evidence_sentence() by asking a human evaluator which sentence better supports answering the question. Target >70% preference for the new sentence extractor."
+  ],
+  "risks": [
+    "Self-contained false positives: questions with numeric data in the stem that actually require external context (e.g., a question that lists some measurements but asks about a mechanism not described in the data) would be incorrectly fast-pathed, bypassing retrieval that could have helped. Mitigate by tuning the classifier to default to knowledge_gap when uncertain, and by adding a secondary retrieval trigger if the fast-path synthesis confidence score is below a threshold.",
+    "LLM terminology expansion latency: adding a 200-token planning LLM call before each retrieval round adds latency on every query. Mitigate by caching expansion results keyed on question hash within a session, and by using the fastest available provider (haiku-class) for this call rather than the primary synthesis provider.",
+    "Adapter-specific query shaping complexity: different adapter APIs evolve, and hardcoded query shaping rules may break silently when API syntax changes. Mitigate by making shaping rules configurable (env-var-gated dictionaries) and adding adapter-level integration tests that verify shaped queries return non-empty results.",
+    "Citation-seed retrieval cost overrun: if fetched full-text documents contain dense reference lists (50+ citations), extracting and fetching all of them could balloon retrieval costs. Mitigate by capping citation seeds at 4 per round and restricting to DOIs/arXiv IDs that appear in 2+ retrieved documents (consensus citation signal).",
+    "Sentence ranker regression on abstract-only records: when ingestion falls back to abstract-only (no full paper fetched), the sliding window sentence ranker has no advantage over _first_sentence() and adds a small computational overhead. Mitigate by short-circuiting the ranker when section_text length is below 400 chars, preserving the existing behavior for abstract-only records."
+  ]
+}
+```

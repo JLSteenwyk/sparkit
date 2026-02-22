@@ -1,0 +1,73 @@
+```json
+{
+  "proposal_id": "SPARKIT-2026-P01",
+  "title": "Retroductive Gap-Fill Retrieval with Semantic Passage Reranking and Citation Chain Traversal",
+  "distinctive_angle": "Rather than generating all retrieval queries upfront from the raw question, SPARKIT performs a structured gap analysis after each retrieval round by prompting the planning LLM to enumerate specific missing sub-facts from the accumulated evidence corpus, then generates laser-targeted micro-retrieval queries for each gap. This retroductive loop is combined with embedding-based semantic reranking (replacing the current lexical token-overlap scorer) and backward/forward citation chain following for the top-scoring documents via Semantic Scholar Graph API.",
+  "summary": "Three coordinated upgrades to SPARKIT's retrieval and grounding pipeline: (1) Post-Round Gap Analysis: after each retrieval round, an LLM identifies specific factual voids in the evidence corpus and emits structured gap descriptors with a source_preference field; these drive round N+1 queries instead of the pre-planned static intent buckets, making later rounds exponentially more targeted. (2) Semantic Passage Reranker: swap the current title/abstract token-overlap relevance scorer for a lightweight bi-encoder (e.g., BAAI/bge-small-en-v1.5 cached at orchestrator startup) that embeds both the question decomposition and each retrieved passage, reranking by cosine similarity before ingestion selection. (3) Citation Chain Micro-Fetch: for the top-3 highest-scored documents after semantic reranking, resolve their reference and citing-papers lists via Semantic Scholar /references and /citations endpoints, fetch abstracts for uncached entries, and inject the most relevant into the evidence pool without consuming full ingestion budget.",
+  "reasoning": "Hard HLE-Gold Bio/Chem questions fail in SPARKIT for three compounding reasons. First, the upfront 5-intent query plan is generated without knowing what will actually be found, so round 2 and round 3 address evidence gaps with generic reference/adversarial queries rather than targeted fact-retrieval, wasting retrieval budget on non-specific queries. Second, the lexical token-overlap relevance scorer penalizes semantically rich but terminologically varied papers: a paper on 'GroEL-GroES ATP hydrolysis kinetics' is relevant to 'chaperonin-assisted folding energetics' but scores low on token overlap, causing the wrong documents to be preferred for ingestion and downstream synthesis. Third, the most authoritative evidence for niche STEM questions often lies in the top-cited references of the first highly relevant paper found (the seminal-paper-plus-descendants pattern), which SPARKIT never follows because retrieval is limited to direct API queries. Fixing all three in a coordinated way targets the primary failure modes for challenging questions without modifying synthesis logic, so gains transfer across all provider configurations including single_openai, single_anthropic, and routed_frontier modes.",
+  "expected_impact": {
+    "accuracy_delta_pct_points": 11,
+    "cost_impact": "increase",
+    "latency_impact": "increase",
+    "confidence": "medium"
+  },
+  "implementation_plan": [
+    {
+      "step": "Add semantic passage reranker: load BAAI/bge-small-en-v1.5 via sentence-transformers at orchestrator startup with lazy initialization on first request; cache model in process memory; after each retrieval round, embed the concatenated question + decomposition text and all retrieved record titles+abstracts; replace the current relevance_score field with cosine similarity; gate behind SPARKIT_ENABLE_SEMANTIC_RERANK=1 env var with fallback to current lexical scorer when disabled",
+      "owner": "services/orchestrator/app/retrieval_planner.py",
+      "effort": "medium"
+    },
+    {
+      "step": "Implement post-round gap analysis: after round 1 ingestion, collect all absorbed passage text and call the planning provider with a structured prompt instructing it to list up to 6 specific unresolved sub-facts and emit for each a JSON object with fields fact_description, retrieval_query, and source_preference (academic|web|preprint); validate output against a Pydantic schema; inject resulting queries as the round-2 retrieval plan, replacing the static intent bucket queries; fall back to original intent queries if schema validation fails",
+      "owner": "services/orchestrator/app/engine.py",
+      "effort": "medium"
+    },
+    {
+      "step": "Implement citation chain traversal: for the top-3 documents by semantic score after round 1, call Semantic Scholar Papers API /paper/{paperId}/references and /paper/{paperId}/citations with fields=title,abstract,year,externalIds; deduplicate candidates against already-retrieved DOIs and URLs; score candidates with the semantic reranker; ingest abstracts of the top-5 new candidates with cosine score above 0.55 directly as passage records without triggering full PDF fetch; gate behind SPARKIT_ENABLE_CITATION_CHAIN=1 and enforce Semantic Scholar rate limits with per-domain token bucket tracking",
+      "owner": "services/retrieval_service",
+      "effort": "medium"
+    },
+    {
+      "step": "Wire gap descriptor count into adaptive retrieval gating: if gap analysis returns fewer than 2 unresolved facts, allow early stopping even if round count is below SPARKIT_ADAPTIVE_MIN_ROUNDS; if gap analysis returns 5 or more unresolved facts, override early-stop and force at least one additional round regardless of SPARKIT_ADAPTIVE_MIN_NEW_DOCS threshold; update SPARKIT_ADAPTIVE_* env var documentation accordingly",
+      "owner": "services/orchestrator/app/engine.py",
+      "effort": "low"
+    },
+    {
+      "step": "Route gap queries by source_preference field: extend the retrieval service dispatcher to forward queries with source_preference=web to the Brave Search adapter, source_preference=preprint to arXiv, and source_preference=academic to Semantic Scholar; this avoids sending preprint-specific gap queries to Crossref or web-specific gap queries to Europe PMC, improving per-call recall",
+      "owner": "services/retrieval_service/app/dispatcher.py",
+      "effort": "low"
+    },
+    {
+      "step": "Add orchestrator startup CI smoke test: verify bi-encoder loads in under 5 seconds on the CI runner, produces correct similarity ranking on 3 fixed STEM question-passage pairs with known relevance order, and that citation chain traversal returns at least 1 result for a known Semantic Scholar paper ID; fail CI if any assertion is violated",
+      "owner": "services/orchestrator/tests/",
+      "effort": "low"
+    },
+    {
+      "step": "Run HLE-Gold-149 ablation benchmark with 8 configurations: each combination of semantic_rerank, citation_chain, and gap_fill independently toggled on and off; capture per-question score delta, average evidence count, retrieval source diversity (unique API sources per question), and cost and latency breakdown; publish consolidated manifest and verify combined config outperforms any single component in isolation",
+      "owner": "services/eval_service",
+      "effort": "high"
+    }
+  ],
+  "retrieval_improvements": [
+    "Semantic bi-encoder reranking replaces lexical token-overlap scoring: documents with high conceptual relevance but low terminological overlap caused by synonyms, acronyms, and field-specific jargon will be correctly prioritized over superficially keyword-matching but less useful papers, directly fixing the primary cause of wrong-document ingestion on niche STEM questions",
+    "Post-round gap analysis generates targeted micro-retrieval queries for specific unresolved sub-facts rather than repeating generic 5-intent-category queries; round 2 and round 3 queries become hypothesis-specific and fact-targeted rather than question-level, dramatically increasing the probability that each retrieval round fills a real evidence gap",
+    "Citation chain traversal via Semantic Scholar Graph API fetches abstracts of top-cited references and citing papers for the highest-scored documents, exploiting the seminal-paper-plus-descendants evidence pattern common in STEM literature without consuming full text ingestion budget on the citation candidates",
+    "Gap descriptor source_preference field routes each gap query to the most appropriate API adapter: Brave Search for recent web evidence and technical documentation, arXiv for preprints and cutting-edge results not yet peer-reviewed, Semantic Scholar for established peer-reviewed academic literature, improving recall per API call compared to broadcasting all queries to all sources",
+    "Gap count drives adaptive retrieval gating: many unresolved facts detected by gap analysis force additional retrieval rounds while few gaps trigger early stopping, tightly coupling evidence coverage state to round budget allocation rather than using a fixed document-count threshold that ignores whether the retrieved documents actually answer the question"
+  ],
+  "evaluation_plan": [
+    "Ablation benchmark: run HLE-Gold-149 with all 8 combinations of the three toggles (semantic_rerank, citation_chain, gap_fill); report per-config accuracy, average evidence count, retrieval source diversity score (unique API sources per question), cost in USD, and latency in seconds; verify that the combined all-three config outperforms any single-component config by at least 2 percentage points and that no component individually degrades accuracy relative to the current routed_frontier baseline",
+    "Semantic reranker calibration check: for 20 manually labeled question-document pairs with known binary relevance from the HLE-Gold dataset, verify that the bi-encoder reranker achieves NDCG@5 of at least 0.75 compared to the current lexical scorer baseline of approximately 0.55; add this as an automated pytest assertion in services/orchestrator/tests/ that runs on every CI build",
+    "Gap analysis coverage check: for a held-out set of 30 HLE-Gold questions where round-1 retrieval alone achieves below 50 percent accuracy on the current baseline, verify that gap analysis produces at least 3 structurally distinct queries per question (measured by pairwise edit distance > 0.4) and that at least one gap query retrieves a document not present in the original round-1 pool, targeting a new-document rate of at least 0.70 across the 30-question set",
+    "Citation chain yield check: for the 20 questions with the lowest baseline accuracy on HLE-Gold-149, measure what fraction of round-1 top-3 documents have Semantic Scholar citation data available, how many new candidate abstracts are fetched on average, and how many pass the 0.55 cosine similarity cutoff; target at least 6 new candidates per question passing the cutoff, confirming citation chain adds non-trivial evidence for hard questions",
+    "Regression gate on easy questions: verify no degradation on the 20 easiest HLE-Gold questions where current routed_frontier accuracy is at least 90 percent; confirm that adding semantic reranking, citation chain, and gap fill does not decrease accuracy on this easy subset by more than 2 percentage points, ensuring that tuning for hard-question performance does not overfit or disrupt the retrieval pipeline for straightforward questions"
+  ],
+  "risks": [
+    "Bi-encoder model cold-start adds 2 to 4 seconds and approximately 500MB process memory at orchestrator startup; in memory-constrained deployments this may require increasing the orchestrator container memory limit and adding a readiness probe delay before the first request is accepted",
+    "Gap analysis LLM call adds one planning provider round-trip per retrieval round, costing approximately $0.01 to $0.05 per question at claude-opus-4-6 pricing; for runs near the max_cost_usd budget ceiling, gap analysis should be skipped when more than 60 percent of the budget is already consumed, requiring a budget-aware gate in engine.py before the gap analysis call",
+    "Semantic Scholar citation API free tier is rate-limited at 100 requests per minute; citation chain traversal for 3 documents per question across a 149-question benchmark could saturate this limit during parallel eval runs; mitigated by implementing a per-domain rate-limit token bucket in the retrieval service dispatcher with configurable SEMANTIC_SCHOLAR_RPM env var and adding randomized jitter to inter-request delays",
+    "Gap analysis output quality degrades for ambiguous or underspecified questions where the LLM produces vague or redundant gap descriptors that map to queries no better than the original intent categories; mitigated by Pydantic schema validation requiring minimum fact_description length and a fallback to original intent queries when fewer than 2 valid gap descriptors pass validation, preventing silent quality regression",
+    "Citation chain traversal may introduce domain drift by injecting broadly topical citation candidates that dilute the evidence pool with marginally relevant content from tangentially related subfields; mitigated by the hard cosine similarity cutoff of 0.55 applied to all citation candidates before ingestion and by counting citation-chain records toward the per-source cap in source diversity enforcement to prevent citation chain from dominating the evidence pool"
+  ]
+}
+```

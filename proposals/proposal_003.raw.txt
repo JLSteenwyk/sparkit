@@ -1,0 +1,87 @@
+Now I have a thorough understanding of the architecture. Let me produce the proposal.
+
+```json
+{
+  "proposal_id": "SPARKIT-HPR-2026-001",
+  "title": "Hypothesis-Prior Retrieval with Post-Synthesis Claim-Level Verification Loops",
+  "distinctive_angle": "Invert SPARKIT's current search-then-answer paradigm: generate cheap candidate hypotheses before retrieval, derive hypothesis-targeted falsification/verification queries from those candidates, then close the loop with a claim-level re-retrieval pass triggered by the synthesis draft itself—making every generated answer also a retrieval signal for its own fact-checking.",
+  "summary": "SPARKIT derives retrieval queries from question text alone (intent buckets: primary, options, methods, adversarial, reference). For hard questions this produces generic evidence pools because the optimal search terms are only knowable once you know what you are trying to prove or disprove. This proposal adds three tightly integrated mechanisms: (1) a pre-retrieval hypothesis generation step using a cheap reasoning model (deepseek-reasoner at $0.28/$0.42 per 1M tokens) to produce 2-3 candidate answers with key discriminating terms; (2) two new retrieval intent buckets—'hypothesis_verify' and 'hypothesis_falsify'—that derive queries from the candidate answers rather than from raw question text; and (3) a post-synthesis claim verification pass where specific factual assertions extracted from the synthesis draft trigger one targeted retrieval round for ungrounded claims before final answer selection. Together these form a closed-loop evidence-synthesis cycle. The mechanism integrates directly with the existing adaptive retrieval loop in engine.py, the _decompose_retrieval intent-bucket system, the calibration.py feature set (adding a new hypothesis_prior_agreement metric), and the should_stop_early budget guard.",
+  "reasoning": "Hard questions fail SPARKIT for three identifiable root causes visible in the architecture: (A) retrieval queries derived from raw question text surface surface-similar documents but miss the single authoritative source because the discriminating terms are in the answer, not the question—e.g., 'what protein mediates X' cannot generate the query 'PALB2 BRCA1 nuclear retention mechanism' without knowing PALB2 is the answer; (B) the synthesis draft constructs plausible-sounding claims that pass the MCQ option-scoring prompt but are ungrounded against retrieved passages, which only becomes visible after calibration computes unsupported_claims; (C) the current adversarial query bucket targets contradictions to the question globally, not to specific candidate answers, so it dilutes rather than discriminates. Hypothesis-prior retrieval attacks root cause A by deriving targeted queries from candidate answers generated cheaply before expensive retrieval. For MCQ, each option label is already a hypothesis—this proposal formalizes that intuition by generating option-specific verification queries ('mechanism by which option B is true') and falsification queries ('evidence against option B OR why option C fails'), which are far more precise than the current token-overlap 'options' intent bucket. Post-synthesis claim verification attacks root cause B by extracting concrete factual assertions from the draft answer and checking their token-overlap coverage against evidence_store records, triggering a targeted retrieval round when coverage falls below 0.45—the existing abstention threshold in _abstain_reasons. This creates a feedback loop between synthesis and retrieval that is currently absent: SPARKIT today generates a draft, measures quality via calibration, and either accepts or abstains, but never uses the draft content to improve retrieval. The cost of hypothesis generation with deepseek-reasoner is under $0.005 per question for 2-3 hypotheses at ~150 tokens each, while the potential accuracy gain from surfacing niche targeted evidence is substantial for HLE-grade questions.",
+  "expected_impact": {
+    "accuracy_delta_pct_points": 6,
+    "cost_impact": "increase",
+    "latency_impact": "increase",
+    "confidence": "medium"
+  },
+  "implementation_plan": [
+    {
+      "step": "Add _generate_hypotheses(question, task_type, options, planning_client) to engine.py. Uses cheap model (deepseek-reasoner or kimi-k2-turbo selected from the existing routing.py provider plan) to generate 2-3 candidate answers with key_terms list per hypothesis in ~150 output tokens. For MCQ task_type, directly reuses option labels as hypotheses and adds one 'none of the above is correct' adversarial hypothesis. Returns list of dicts: [{text, rationale, key_terms}]. Insert call after _decompose_question() and before _decompose_retrieval().",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Add 'hypothesis_verify' and 'hypothesis_falsify' intent buckets to _decompose_retrieval() in engine.py. For each hypothesis (max 3), generate: (a) verify query = '{key_terms joined} supporting evidence {short_hypothesis_text}'; (b) falsify query = '{key_terms joined} contradicts OR alternative mechanism {short_hypothesis_text}'. Cap total hypothesis queries at 4 regardless of hypothesis count to avoid query explosion. Append these to the existing per-intent query dict so they flow through the standard search_literature path.",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "In aggregator.py, accept an optional query_type parameter per query dict (extend the query structure passed to search_literature). When query_type='hypothesis', increase per-source max_results by 30% (multiply by 1.3, round up) to favor recall for hypothesis-targeted evidence. Apply _limit_source_dominance after the boost to preserve source diversity.",
+      "owner": "retrieval",
+      "effort": "low"
+    },
+    {
+      "step": "Add _extract_synthesis_claims(answer_text, planning_client) to engine.py. Calls cheap LLM with a structured prompt requesting exactly 3-5 specific verifiable factual claims (not hedges, not opinions, not probability statements) as a numbered list. Parse with regex (line-by-line numbered list). Return list of claim strings. Insert call immediately after the primary synthesis draft is produced but before MCQ option scoring or debate judge runs.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Add _compute_claim_coverage(claims, evidence_store) to engine.py. For each claim string, compute max(_record_relevance_score(claim, record, boost_terms=[]) for record in evidence_store.records) using the existing token-overlap function but with claim text substituted for question text. Return dict mapping claim_text to float coverage score. This reuses the existing _record_relevance_score implementation without modification.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Add _generate_verification_queries(unverified_claims, focus_terms) to engine.py. For each claim with coverage < 0.45 (below the existing abstention threshold in _abstain_reasons), generate one targeted query by extracting the highest-information tokens from the claim via _tokenize() minus _STOPWORDS, then appending focus_terms from the retrieval plan. Cap at 3 verification queries total.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Integrate claim verification round into the adaptive retrieval loop in engine.py. After the initial synthesis draft and before final answer selection: if should_stop_early() returns False AND remaining budget > $0.05 AND any claim coverage < 0.45, execute one verification retrieval round via search_literature with verification queries, re-ingest new records into evidence_store, and re-run the synthesis step. Record this round as stage 'retrieval_verification_round' in the trace with fields: claims_checked, claims_ungrounded, queries_issued, new_docs_retrieved. Skip entirely if budget or latency is exhausted.",
+      "owner": "orchestrator",
+      "effort": "high"
+    },
+    {
+      "step": "Update calibration.py CalibrationFeatures dataclass to add hypothesis_prior_agreement: float field = fraction of initial hypothesis key_terms that appear in the final answer text (token intersection). Update calibrate_answer() to incorporate this as a +0.05 * hypothesis_prior_agreement bonus term to raw confidence. This rewards answers that align with hypothesis predictions, which are independently derived from the question.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Add unit tests to test_synthesis_quality.py: (a) test _generate_hypotheses() output parsing with mock LLM response returning numbered hypothesis list; (b) test _extract_synthesis_claims() parsing with mock answer text; (c) test _compute_claim_coverage() with mock evidence_store records; (d) test _generate_verification_queries() produces capped query count; (e) integration smoke test confirming verification round fires when claim_coverage < 0.45 and skips when budget exhausted. Use existing mock patterns from test_synthesis_quality.py.",
+      "owner": "QA",
+      "effort": "medium"
+    }
+  ],
+  "retrieval_improvements": [
+    "Replace generic question-text-derived queries with hypothesis-indexed queries that encode specific candidate answers as search targets. For a question about protein interactions, a hypothesis-verify query for 'PALB2' will surface PALB2-BRCA1 papers that a generic 'protein interaction BRCA1' query misses, because discriminating terms live in the answer space not the question space.",
+    "Add 'hypothesis_falsify' intent bucket generating negation-framed queries per candidate answer (e.g., '{hypothesis_key_terms} disproven OR contradicts OR alternative mechanism'). This is categorically distinct from the existing 'adversarial' bucket which generates contradictions against the question topic globally—hypothesis-level falsification queries are answer-discriminative rather than topic-discriminative.",
+    "Post-synthesis claim-level re-retrieval: after the synthesis draft, ungrounded claims (coverage < 0.45 by token-overlap against evidence_store) trigger fresh targeted queries. This fills precise evidence gaps that are only identifiable after seeing the draft answer—gaps the pre-retrieval planning phase structurally cannot anticipate.",
+    "For MCQ questions, upgrade the 'options' intent bucket from single-label queries to dual-mode per-option queries: one verification query per option ('mechanism supporting {option_label} {option_text}') and one elimination query ('why {option_label} fails OR evidence against {option_text}'). This makes each retrieval round maximally discriminative between MCQ options instead of collecting evidence that equally supports multiple options.",
+    "Boost per-query result depth by 30% for hypothesis-category queries in aggregator.py (hypothesis_verify, hypothesis_falsify, retrieval_verification_round) to favor recall when searching for hypothesis-specific evidence. Standard depth is preserved for broader contextual buckets (primary, reference, methods) to control total cost."
+  ],
+  "evaluation_plan": [
+    "A/B accuracy test on HLE benchmark: run SPARKIT with hypothesis-prior retrieval enabled vs. disabled on the HLE-25 balanced subset. Measure per-question accuracy, compute paired McNemar test for statistical significance. Primary target: ≥4 percentage point improvement. Also measure accuracy on questions where hypothesis generation produced a hypothesis matching the correct answer vs. not, to validate the hypothesis-quality-to-accuracy correlation.",
+    "Claim coverage audit: for 30 randomly sampled synthesis drafts from the RESEARCH_MAX benchmark run, extract claims via _extract_synthesis_claims() and compute average claim coverage score before and after the verification retrieval round. Target: ≥15% mean coverage improvement for questions that triggered the verification round. Report the fraction of questions where verification round fires (budget-gated) to assess effective coverage.",
+    "Abstention rate regression: hypothesis-prior retrieval should increase citation_coverage (the 0.40 threshold in _abstain_reasons) by surfacing more targeted evidence, reducing spurious abstentions. Measure abstention_rate before/after on HLE-25. Verify that abstention_rate decreases AND that questions abstained-on pre-change but answered post-change are correct ≥60% of the time (i.e., new answers are not random guesses).",
+    "Cost regression guard: verify that hypothesis generation + claim extraction + verification round increases median per-question cost by no more than $0.08 at RESEARCH_MAX budget and no more than $0.03 at standard budget. Measure accuracy-per-dollar before/after to confirm positive ROI. Flag any configuration where verification round fires on >80% of questions as a sign that claim coverage threshold needs tuning.",
+    "Retrieval precision spot-check: for 20 hard HLE questions, manually inspect the top-5 documents returned by hypothesis_verify queries vs. top-5 from the existing primary queries. Rate each document's relevance to the specific candidate answer being tested (1=irrelevant, 2=tangential, 3=directly relevant). Target hypothesis_verify mean relevance ≥2.2 vs. primary query baseline. This validates that hypothesis-derived queries surface more targeted evidence.",
+    "Hypothesis quality calibration: measure the correlation between hypothesis_prior_agreement (fraction of hypothesis key_terms appearing in final answer) and final answer correctness across 50 benchmark questions. If correlation Pearson r ≥ 0.3, the hypothesis_prior_agreement term is a valid calibration signal and its 0.05 weight coefficient in calibrate_answer() is justified; otherwise reduce or remove the weight."
+  ],
+  "risks": [
+    "Hypothesis generation hallucination: a cheap model generating a confident but wrong hypothesis will cause hypothesis_verify queries to retrieve irrelevant evidence supporting a false claim, potentially biasing the synthesis step. Mitigated by (a) capping at 3 diverse hypotheses that collectively cover the option space rather than committing to a single prediction, (b) retaining all existing standard query buckets so hypothesis queries are additive not substitutive, and (c) using only key_terms (not full hypothesis text) in queries to prevent exact-match chasing.",
+    "Verification round latency budget: the post-synthesis retrieval round adds up to 12-18 seconds of retrieval and ingestion latency. On tight budget configurations (max_latency_s < 60 or max_cost_usd < 1.0), the round will be skipped by the existing should_stop_early() guard, making the improvement profile inconsistent across budget tiers. Document this trade-off in configuration guidance; consider adding SPARKIT_ENABLE_VERIFICATION_ROUND=true/false as an explicit toggle.",
+    "Claim extraction prompt fragility: the LLM tasked with extracting specific factual claims from synthesis drafts may return hedged pseudo-claims ('evidence is mixed about X') or over-general claims ('the answer involves protein interactions') that produce meaningless verification queries. Requires few-shot examples of good vs. bad claim extraction in the prompt, plus a post-parse validation step that rejects claims shorter than 5 tokens or containing uncertainty markers ('may', 'might', 'unclear').",
+    "Query explosion for multi-hypothesis complex questions: 3 hypotheses × 2 queries each = 6 hypothesis queries added on top of existing primary/options/adversarial/methods/reference buckets. Without strict caps, total query count can double. Mitigated by hard-capping hypothesis queries at 4 total regardless of hypothesis count, and enforcing this before passing to search_literature.",
+    "Coverage score instability for highly technical short claims: token-overlap relevance scoring in _record_relevance_score works poorly for very technical short claims using uncommon abbreviations or systematic nomenclature (e.g., 'Kv2.1 S586A phosphomimetic' or 'MANE Select transcript NM_001374') where exact string matches are required. These claims will appear low-coverage even when grounded in retrieved abstracts using synonyms. Partially mitigated by including focus_terms from the retrieval plan in _compute_claim_coverage to boost technical anchor matching.",
+    "Calibration coefficient miscalibration: adding hypothesis_prior_agreement as a +0.05 weight in calibrate_answer() increases confidence for questions where the pre-retrieval hypothesis matched the final answer. If hypothesis quality is low (cheap model wrong), this term systematically overestimates confidence. Gate the coefficient addition behind a validation threshold: only apply the bonus if hypothesis_prior_agreement > 0.5 (majority of hypothesis key_terms present), otherwise set contribution to zero."
+  ]
+}
+```

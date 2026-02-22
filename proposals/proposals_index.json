@@ -1,0 +1,11 @@
+{
+  "created_at": "20260222T182407Z",
+  "started_at": "2026-02-22T18:24:07Z",
+  "completed_at": "2026-02-22T18:24:07Z",
+  "num_runs": 50,
+  "max_parallel": 5,
+  "timeout_s": 900,
+  "success_count": 0,
+  "failure_count": 0,
+  "proposals": []
+}

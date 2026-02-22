@@ -1,0 +1,17 @@
+The background audit agent has completed — its independent findings fully corroborate the analysis behind the proposal. Both confirm the same critical bottlenecks: single-sentence evidence compression, BM25-only ranking throughout, no falsification retrieval, and keyword-only contradiction detection.
+
+The proposal is ready. To summarize what it addresses that is **not already on the backlog**:
+
+| Gap | Proposal Component |
+|---|---|
+| 14-doc ingestion pool includes near-miss papers | Pre-ingestion LLM abstract screening gate |
+| Each document → 1 × 180-char first sentence | Multi-passage typed claim extraction (3 × 400 chars, typed as measure/mechanism/caveat) |
+| MCQ queries only generate support evidence | New `falsification` retrieval intent (`evidence against {option}`, `{option} incorrect`) |
+| Semantic Scholar used only for keyword search | Citation recommendations API hop for semantic adjacency |
+| Local corpus drops terms beyond 8-token cap | Token cap increase 8→16 + lexical anchor boosting |
+
+**Next steps — let me know which to proceed with:**
+
+1. **Implement** — I can build all 7 implementation steps in sequence against the live codebase
+2. **Scope down** — Pick 1-3 components to implement first (e.g., falsification queries + abstract screening as the highest-ROI pair)
+3. **Benchmark first** — Run the existing HLE-25 baseline before any changes so we have a clean A/B comparison point

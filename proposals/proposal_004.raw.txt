@@ -1,0 +1,79 @@
+```json
+{
+  "proposal_id": "HAET-001",
+  "title": "Hypothesis-Anchored Evidence Targeting with Semantic Cross-Claim Entailment (HAET)",
+  "distinctive_angle": "Invert the retrieval direction: instead of searching for documents that match the question, generate plausible answer hypotheses first and then retrieve documents that confirm or refute each hypothesis's key factual claims. This forces retrieval to be outcome-grounded rather than query-grounded, and is especially powerful for hard multi-hop questions where the evidence chain is not lexically adjacent to the question surface form.",
+  "summary": "HAET adds three interlocking layers to SPARKIT's existing pipeline. First, a pre-retrieval hypothesis generation step (one LLM call in _decompose_retrieval) produces 3-5 candidate answer structures with their extractable factual claims; these claims become first-class retrieval targets that drive focused, hypothesis-specific query strings in every round. Second, citation chain traversal is added to the ingestion loop so that when a paper scores above a configurable relevance threshold, its reference list is parsed and injected into the next retrieval round's queue, catching foundational sources that recency-weighted keyword ranking suppresses. Third, SPARKIT's marker-based verifier is replaced with a two-stage semantic entailment pass: a fast BM25 gate selects candidate claim pairs likely to conflict, then a small hosted NLI model (e.g., cross-encoder/nli-deberta-v3-small via a sidecar endpoint) classifies each pair as entails/neutral/contradicts, enabling per-claim contradiction attribution rather than uniform penalty spreading.",
+  "reasoning": "On HLE-class questions the correct answer often hinges on an obscure sub-fact that keyword queries never surface because the fact is expressed differently in the literature than in the question stem. Hypothesis-anchored retrieval converts the planning model's implicit world-knowledge into explicit retrieval probes, bridging this lexical gap. Citation traversal specifically addresses academic literature where the canonical source for a fact is a 2008 paper cited inside a 2023 review — the 2023 review may score high on recency but the 2008 paper contains the primary evidence. Without traversal, SPARKIT ingests the surrogate and inherits its imprecision. The NLI-based verifier matters because SPARKIT's current marker system (lines 1-60 of verifier.py) scores 'negative result' and 'null result' as contradiction markers regardless of whether they are about the same claim or a tangential finding; this fires false positives that penalize all claims by up to 0.35, artificially suppressing confidence on hard questions with rich but methodologically nuanced literature. Replacing it with pairwise NLI means only structurally contradictory claim pairs trigger penalties, and each penalty is sized to that pair's entailment confidence, not a fixed cap.",
+  "expected_impact": {
+    "accuracy_delta_pct_points": 6,
+    "cost_impact": "increase",
+    "latency_impact": "increase",
+    "confidence": "medium"
+  },
+  "implementation_plan": [
+    {
+      "step": "Add HypothesisDecomposer: extend _decompose_retrieval() in engine.py to call a new _generate_answer_hypotheses() method that prompts the planning provider for 3-5 candidate answer structures. Each hypothesis is a JSON object with 'claim_text', 'key_entities', and 'query_strings' (2-3 targeted queries per hypothesis). Store in OrchestrationContext.hypothesis_plan. Gated by new env var SPARKIT_HYPOTHESIS_ANCHORED=1.",
+      "owner": "orchestrator/engine.py",
+      "effort": "medium"
+    },
+    {
+      "step": "Wire hypothesis queries into retrieval rounds: in _build_retrieval_rounds(), for each hypothesis in hypothesis_plan append one dedicated sub-round whose queries come from hypothesis.query_strings rather than generic intent templates. Label them 'retrieval_round_hypothesis_{i}'. The adaptive gate must count hypothesis rounds separately so they are not pruned before min_rounds.",
+      "owner": "orchestrator/engine.py",
+      "effort": "medium"
+    },
+    {
+      "step": "Implement citation chain traversal in the ingestion loop: after _select_best_section_chunk() on a document with relevance > SPARKIT_CITATION_CHAIN_THRESHOLD (default 0.55), parse the References section of the ingested HTML/PDF text (regex over 'References', 'Bibliography' heading), extract DOIs using doi.org URL pattern and bare DOI regex, and push unique DOIs into a pending_doi_queue on OrchestrationContext. On each subsequent retrieval round, resolve up to SPARKIT_CITATION_CHAIN_PER_ROUND (default 3) queued DOIs via the Crossref adapter and inject the resulting LiteratureRecords into the round's record pool before deduplication.",
+      "owner": "orchestrator/engine.py + ingestion_service/parser.py",
+      "effort": "high"
+    },
+    {
+      "step": "Add NLI sidecar service: create services/nli_service/ with a FastAPI wrapper around cross-encoder/nli-deberta-v3-small (HuggingFace transformers, CPU inference sufficient for ~200 claim pairs per request). Expose POST /entailment with body {pairs: [[premise, hypothesis], ...]} returning list of {label, score}. Add SPARKIT_NLI_ENDPOINT env var; if unset, fall back to existing marker-based verifier to maintain backward compatibility.",
+      "owner": "services/nli_service/ (new)",
+      "effort": "high"
+    },
+    {
+      "step": "Replace marker scoring in verifier.py with two-stage NLI: (1) BM25 gate — for each pair of claims (c_i, c_j) from different source DOIs, compute BM25 overlap; keep only pairs with overlap > 0.15 as candidates (O(n^2) pruned to manageable set). (2) NLI pass — POST candidate pairs to NLI sidecar, classify as contradicts/entails/neutral. For each contradicts pair: penalize the lower-confidence claim's confidence by nli_score * 0.20 (capped at 0.30 per claim); for each entails pair: add +0.05 support bonus. Update _run_verifier() to aggregate per-claim penalties rather than uniform global penalty.",
+      "owner": "orchestrator/verifier.py",
+      "effort": "high"
+    },
+    {
+      "step": "Add evidence gap detection pass after each retrieval round: after computing selected_quality and new_unique_docs in the adaptive gate, run a new _detect_evidence_gaps() call that prompts the planning provider with the hypothesis_plan and the current claim set, asking it to return which hypothesis claims are still ungrounded (no supporting claim with support_score > 0.5). For each ungrounded claim, append one targeted Brave web search query to the next round (gated by SPARKIT_ENABLE_WEB_SEARCH). This replaces the static adversarial round 3 intent with a dynamic gap-fill intent.",
+      "owner": "orchestrator/engine.py",
+      "effort": "medium"
+    },
+    {
+      "step": "Update calibration model in calibration.py: add two new CalibrationFeatures fields — hypothesis_coverage (fraction of hypotheses with >= 1 supporting claim above 0.5) and nli_entailment_support (avg entailment score of confirming claim pairs). Update calibration formula to include +0.10*hypothesis_coverage + 0.05*nli_entailment_support, and reduce the fixed base from 0.25 to 0.10 to keep the ceiling math balanced. Adjust existing weights proportionally.",
+      "owner": "orchestrator/calibration.py",
+      "effort": "low"
+    },
+    {
+      "step": "Write unit tests: extend test_synthesis_quality.py with tests for (a) hypothesis plan JSON parsing and query extraction, (b) DOI extraction regex against 5 sample reference formats, (c) BM25 gate correctly prunes cross-source claim pairs below threshold, (d) NLI-based per-claim penalty scales with entailment score, (e) calibration formula updated features produce valid [0.05, 0.95] outputs. Add integration test stub that mocks NLI endpoint and verifies verifier returns per-claim (not uniform) confidence deltas.",
+      "owner": "orchestrator/tests/",
+      "effort": "medium"
+    }
+  ],
+  "retrieval_improvements": [
+    "Hypothesis-anchored query generation: each of 3-5 pre-retrieval hypotheses contributes 2-3 targeted queries derived from its key claim entities, producing retrieval probes that are semantically orthogonal to generic question-expansion queries and specifically probe the evidence chain needed to validate or invalidate each candidate answer — directly addressing the lexical gap between question surface form and evidence location in academic literature.",
+    "Citation chain traversal: when an ingested paper scores above the relevance threshold, its reference DOIs are parsed from the References/Bibliography section and injected into subsequent retrieval rounds via the Crossref adapter, giving SPARKIT access to primary sources that only appear as citations in retrieved reviews — critical for hard questions whose correct answer depends on a foundational paper that recency-weighted scoring would rank below recent reviews.",
+    "Dynamic evidence gap-fill queries via Brave web search: after each retrieval round, an LLM-based gap detection pass identifies which hypothesis claims remain ungrounded and generates targeted Brave web search queries to fill those specific gaps — replacing the static adversarial round 3 intent with adaptive queries that are directly tied to missing evidence rather than generic contradiction seeking.",
+    "Pairwise BM25-gated NLI contradiction screening: before invoking the NLI sidecar, a BM25 overlap gate prunes the O(n^2) claim-pair space to only pairs sharing significant lexical content — ensuring that NLI calls are spent on pairs likely to be about the same sub-fact, dramatically reducing false-positive contradiction flags that currently suppress confidence across unrelated claims.",
+    "Per-claim entailment bonuses for convergent evidence: NLI pairs classified as 'entails' between claims from independent sources receive a +0.05 support bonus, allowing the calibration model to distinguish between a claim supported by one paper versus a claim supported by three independent papers that semantically entail each other — a signal currently invisible to SPARKIT's token-overlap support scoring."
+  ],
+  "evaluation_plan": [
+    "Ablation on HLE-gold benchmark: run HAET with each of the three new components independently disabled (no hypothesis anchoring, no citation traversal, no NLI verifier) and measure accuracy delta vs. baseline on the same 50-question HLE-gold subset, isolating each component's contribution. Report per-component delta with 95% bootstrap CI.",
+    "Hypothesis coverage rate: for each question in the benchmark, measure the fraction of generated hypotheses that achieve >= 1 supporting claim with support_score > 0.5 after retrieval; track hypothesis_coverage distribution across correct vs. incorrect final answers to verify that higher coverage correlates with correct answers (expected Spearman rho > 0.30).",
+    "Citation chain utility: for each traversal event (DOI injected from reference list), record whether the resolved paper was eventually ingested and whether any claim derived from it contributed to the final answer. Track citation_chain_hit_rate; flag traversal as productive if >= 20% of injected DOIs yield an ingested document with support_score > 0.5.",
+    "NLI false-positive rate: on a 100-claim-pair gold set manually labeled as contradicts/entails/neutral (sampled from HLE-gold retrieval outputs), measure NLI sidecar precision and recall at the operating threshold; require precision > 0.80 for contradicts class before enabling NLI in production to avoid over-penalizing correct answers.",
+    "Confidence calibration improvement: compute Expected Calibration Error (ECE) on HLE-gold before and after adding hypothesis_coverage and nli_entailment_support to the calibration formula; require ECE reduction of >= 0.02 (absolute) to validate that new features improve calibration rather than just shifting scores.",
+    "Latency and cost budget compliance: measure p50/p95 wall-clock latency and cost per question with HAET enabled in RESEARCH_MAX mode; require that p95 latency stays below 120s and per-question cost stays below $0.40 on the HLE-gold 50-question set to confirm HAET is deployable within existing budget policy limits."
+  ],
+  "risks": [
+    "Hypothesis generation quality dependency: if the planning model generates low-diversity or factually biased hypotheses (e.g., all pointing toward a plausible but wrong answer), the hypothesis-anchored retrieval rounds will over-index on confirming evidence for the wrong answer, potentially worsening accuracy on questions where the correct answer is counterintuitive. Mitigation: require at least one 'null hypothesis' (no-effect or negative answer) in every hypothesis plan, and monitor hypothesis_coverage for cases where all hypotheses receive zero support.",
+    "Citation chain retrieval latency spiral: parsing reference lists and resolving DOIs via Crossref adds network round-trips per ingested document; if SPARKIT_CITATION_CHAIN_PER_ROUND is too high or the Crossref API is slow, this can blow the per-question latency budget. Mitigation: hard cap at 3 DOIs per round, enforce a 5-second Crossref timeout, and disable citation traversal if elapsed_time > 0.6 * max_latency_s.",
+    "NLI sidecar cold-start and memory overhead: loading cross-encoder/nli-deberta-v3-small (~180MB) adds memory overhead to the orchestrator pod; if the NLI sidecar is not warmed up, first-request latency can be 2-5 seconds. Mitigation: run NLI sidecar as a separate Docker service with a health-check endpoint; SPARKIT falls back to the existing marker-based verifier (SPARKIT_NLI_ENDPOINT unset) until the sidecar is healthy, ensuring zero-regression deployment.",
+    "BM25 gate threshold sensitivity: if SPARKIT_NLI_BM25_GATE is set too low, the NLI call volume grows super-linearly with evidence count, potentially timing out on questions with large claim sets (> 50 claims). Mitigation: cap total NLI pairs per question at 200; if the BM25 gate would pass more than 200 pairs, raise the threshold dynamically until the cap is met.",
+    "Calibration weight re-tuning needed: adding hypothesis_coverage and nli_entailment_support as new calibration features shifts the score distribution; the new fixed weights in the calibration formula are derived analytically and may need empirical adjustment after seeing real HLE-gold score distributions. Mitigation: run calibration on a held-out 20-question validation set and adjust weights using isotonic regression before production deployment."
+  ]
+}
+```

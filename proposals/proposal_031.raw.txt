@@ -1,0 +1,89 @@
+```json
+{
+  "proposal_id": "SPARKIT-P-001",
+  "title": "Claim-Conditioned Iterative Re-Retrieval with Semantic Reranking and Contrastive Evidence Mining",
+  "distinctive_angle": "Treat retrieved claims as first-class retrieval seeds rather than static answer fragments: each claim extracted from ingested evidence drives a targeted sub-round that resolves the specific knowledge gap the claim exposes, combined with embedding-based candidate reranking (replacing heuristic token overlap) and per-MCQ-option contrastive search designed to falsify—not just support—each candidate answer. This transforms SPARKIT from a question-centric fetcher into a self-directed evidence-centric reasoner.",
+  "summary": "SPARKIT's current retrieval rounds query from static question rewrites derived at planning time. This proposal adds three interlocking improvements: (1) after each ingestion round, extract specific factual claims from ingested passages and use those claims as new retrieval queries in a dedicated 'claim expansion' sub-round, allowing SPARKIT to chase the exact knowledge gap its own evidence exposes; (2) replace the heuristic token-overlap relevance scorer with a fast embedding-API reranker (text-embedding-3-small or Gemini text-embedding-004) applied before ingestion selection, with results cached per SHA-256(text) in a corpus_embeddings Postgres table; and (3) for MCQ questions, generate one 'falsification query' per live answer option—a query explicitly engineered to retrieve evidence CONTRADICTING that option—and inject retrieved counter-passages directly into the existing per-option dossier and blended scoring formula. Together these three changes target SPARKIT's primary failure mode on hard STEM questions: retrieving technically relevant but insufficiently specific or discriminating evidence.",
+  "reasoning": "On HLE-tier STEM questions the limiting factor is not query volume but query specificity and evidence discrimination. SPARKIT's current rewrites are lexical synonyms of the original question—they find the same surface-level papers. Claim-conditioned re-retrieval is fundamentally different: it uses the semantic content of already-found evidence as an intermediate signal, which mirrors how expert researchers actually conduct literature reviews (following claims and citations, not repeating keyword searches). Embedding reranking replaces the title/abstract token-overlap formula—which systematically under-scores papers with terse or jargon-heavy titles common in high-impact chemistry and biology journals—with a cosine similarity score that captures conceptual alignment across paraphrase. Contrastive per-option search directly improves MCQ discrimination: the current adversarial round queries for general contradictions, but hard MCQ distractors are plausible precisely because superficial evidence appears to support them. A targeted falsification query per option exploits SPARKIT's existing MCQ pipeline (option dossiers in engine.py, blended LLM+lexical score in the MCQ scoring section) and pushes counter-evidence directly into per-option evidence packs, making the discriminative signal visible to both the LLM scoring step and the lexical blending formula.",
+  "expected_impact": {
+    "accuracy_delta_pct_points": 5,
+    "cost_impact": "increase",
+    "latency_impact": "increase",
+    "confidence": "medium"
+  },
+  "implementation_plan": [
+    {
+      "step": "Add EmbeddingClient to services/orchestrator/app/providers/clients.py: async wrapper around OpenAI /v1/embeddings (text-embedding-3-small) with Gemini text-embedding-004 as fallback. Batch up to 100 texts per call, return normalized float32 vectors. Add SPARKIT_EMBEDDING_PROVIDER env var (default: openai).",
+      "owner": "backend/providers",
+      "effort": "medium"
+    },
+    {
+      "step": "Add Postgres table corpus_embeddings (id, text_sha256, model_version, vector bytea) via a new Alembic migration. Store embedding model version alongside vector so cache is invalidated on model upgrade.",
+      "owner": "backend/database",
+      "effort": "medium"
+    },
+    {
+      "step": "Add embed_and_rerank(question: str, records: list[LiteratureRecord], top_k: int) -> list[LiteratureRecord] in services/retrieval_service/app/aggregator.py. Embed question + each record's title+abstract, compute cosine similarity, return top_k by score. Cache hits/misses from corpus_embeddings. Gate behind SPARKIT_ENABLE_EMBED_RERANK env var (default 0).",
+      "owner": "backend/retrieval",
+      "effort": "medium"
+    },
+    {
+      "step": "In engine.py _run_retrieval_round(), after heuristic candidate scoring but before ingestion selection, call embed_and_rerank() when the gate is enabled. Re-apply diversity-first constraint (1 per source) after reranking to preserve source breadth.",
+      "owner": "backend/orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Add _extract_claims_for_requery(passages: list[str], question: str, provider) -> list[str] in engine.py: prompt a fast cheap provider (claude-haiku-4-5 or gpt-4o-mini) to extract 3–5 specific factual assertions from ingested passage text most relevant to the question. Return as short declarative sentences. Cap total claim-queries to 6 per run.",
+      "owner": "backend/orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "In engine.py, after Round 1 ingestion completes and before Round 2 starts, add a 'claim_expansion' sub-round: call _extract_claims_for_requery() on the first 4 ingested passages, feed claim strings to search_literature() as additional queries, ingest new records up to SPARKIT_CLAIM_EXPANSION_MAX_DOCS (default 5). Gate with existing adaptive novelty check (skip if new_unique_docs from claim expansion < SPARKIT_ADAPTIVE_MIN_NEW_DOCS).",
+      "owner": "backend/orchestrator",
+      "effort": "high"
+    },
+    {
+      "step": "For MCQ task_type, add _generate_falsification_queries(options: list[str], stem: str, provider) -> dict[str, str] in engine.py: prompt a fast LLM to generate one falsification query per option of the form 'evidence contradicting [option] because ...'. Run these queries via search_literature() during the adversarial retrieval round.",
+      "owner": "backend/orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "In engine.py MCQ scoring section, extend _build_option_dossier() to accept counter_passages from falsification queries. Adjust blended score: subtract SPARKIT_MCQ_FALSIFICATION_WEIGHT (default 0.15) * normalized_counter_evidence_overlap from each option's score, only when counter-evidence overlap exceeds a minimum relevance threshold (0.05).",
+      "owner": "backend/orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Extend observability stage artifacts in observability_store.py to record: embed_rerank_enabled, embed_rerank_latency_ms, claim_expansion_queries_generated, claim_expansion_new_docs, falsification_queries_count. Makes all three features independently traceable in run traces.",
+      "owner": "backend/observability",
+      "effort": "low"
+    },
+    {
+      "step": "In eval_service/app/runner.py, add sparkit_feature_flags dict support in mode config so HLE benchmark runs can selectively enable embed_rerank / claim_expansion / mcq_falsification independently. Run full ablation: baseline, +embed_rerank, +claim_expansion, +mcq_falsification, +all three on HLE-Gold-Bio-Chem-149.",
+      "owner": "eval",
+      "effort": "high"
+    }
+  ],
+  "retrieval_improvements": [
+    "Embedding-based semantic reranking of candidate records (text-embedding-3-small / Gemini text-embedding-004) replaces the heuristic title_overlap + abstract_overlap + recency_bonus scorer in engine.py, surfacing conceptually relevant papers whose titles are terse or terminology-heavy—common in high-impact chemistry and biology journals where keyword overlap systematically fails.",
+    "Claim-conditioned iterative re-retrieval: after Round 1 ingestion, extract 3–5 specific factual assertions from ingested passage text using a fast cheap LLM and use those claim strings as independent search queries in a budget-gated sub-round, allowing SPARKIT to follow the evidence chain rather than repeating the same surface-level question rewrites across all retrieval rounds.",
+    "Per-MCQ-option falsification search: generate one targeted query per live answer option explicitly designed to retrieve evidence contradicting that option, then inject retrieved counter-passages into the existing per-option evidence dossier and blended scoring formula in engine.py, directly improving discrimination on hard distractors that superficial evidence appears to support.",
+    "Embedding cache in Postgres corpus_embeddings table (keyed by SHA-256 of text, including model version): amortizes embedding API cost across questions sharing overlapping evidence and enables similarity-based corpus pre-filtering before live federation calls, making the reranking cost-neutral at scale after warm-up.",
+    "Adaptive claim-expansion budget gate: the claim expansion sub-round respects the same SPARKIT_ADAPTIVE_MIN_NEW_DOCS novelty threshold as existing retrieval rounds and additionally only fires when Round 1 avg_relevance < SPARKIT_CLAIM_EXPANSION_RELEVANCE_THRESHOLD (default 1.5), avoiding unnecessary API calls when the primary retrieval is already high-quality."
+  ],
+  "evaluation_plan": [
+    "Accuracy A/B ablation on HLE-Gold-Bio-Chem-149: run baseline, +embed_rerank, +claim_expansion, +mcq_falsification, and +all configurations; confirm each feature contributes a positive accuracy lift and the combined configuration achieves >= +4 pp over baseline using a two-sided binomial test at p < 0.10.",
+    "Retrieval precision audit: for 20 hard questions where baseline SPARKIT fails, manually inspect ranked candidate lists pre- and post-embed_rerank; measure whether the correct key paper (as identified by gold-answer domain experts) appears in top-5 more frequently—target top-5 hit rate improvement of >= 20 pp over heuristic ranking.",
+    "Falsification coverage check: for MCQ questions where baseline SPARKIT selects the wrong answer with high confidence (answer_confidence >= 0.70), verify that falsification queries retrieve at least one counter-passage containing a term semantically related to the correct answer for >= 60% of such failure cases.",
+    "Claim-expansion novelty check: across 50 benchmark runs with claim expansion enabled, confirm that >= 40% of triggered sub-rounds add >= 2 genuinely new records (non-duplicate-DOI) and that the average new_unique_docs per expansion sub-round exceeds SPARKIT_ADAPTIVE_MIN_NEW_DOCS, validating that the feature adds non-redundant evidence.",
+    "Cost regression gate: confirm that the full three-feature configuration increases median per-question cost by <= 40% vs. baseline (primary drivers: embedding calls ~$0.001–0.003 per question, claim-extraction LLM call ~$0.002, claim-expansion retrieval API calls) and that the corpus_embeddings cache achieves >= 30% hit rate after 50 warm benchmark runs.",
+    "Latency regression gate: confirm that p95 end-to-end latency with all three features enabled remains below the SPARKIT budget cap for routed_frontier mode across 30 live benchmark runs, and that no run triggers stop_reason=latency_exceeded due to embedding or claim-expansion overhead."
+  ],
+  "risks": [
+    "Embedding API adds a new external dependency and per-question cost increment (~$0.001–0.003 for 25–50 records at text-embedding-3-small rates); if embedding batch latency exceeds ~3s on cold starts, it may push p95 latency above budget limits—mitigated by parallelizing embedding calls with httpx async and enforcing a 5s hard timeout per embedding batch with graceful fallback to heuristic ranking.",
+    "Claim-conditioned re-retrieval may amplify early errors: if Round 1 ingests an incorrect or misleading paper, extracted claims will generate queries that reinforce the wrong direction, wasting budget on a false trail—mitigated by capping claim expansion to SPARKIT_CLAIM_EXPANSION_MAX_DOCS=5 new docs per run, requiring the adaptive novelty gate to pass, and logging claim_expansion_queries in trace artifacts for post-hoc debugging.",
+    "Falsification queries for MCQ options may retrieve evidence that superficially matches counter-terms but is semantically irrelevant (spurious counter-evidence), causing SPARKIT to incorrectly penalize the correct option—mitigated by setting a conservative SPARKIT_MCQ_FALSIFICATION_WEIGHT (0.15 vs. 0.30+), only applying the falsification penalty when counter-evidence lexical overlap exceeds a minimum threshold (0.05), and using ablation metrics to tune the weight empirically.",
+    "Embedding model versioning risk: if text-embedding-3-small is deprecated or updated, cached vectors in corpus_embeddings become incompatible with newly computed vectors, producing garbage cosine similarity scores—mitigated by storing the embedding model version string in corpus_embeddings and invalidating stale cache entries on version mismatch before any similarity computation.",
+    "Claim extraction LLM call adds latency and cost on every run even when Round 1 evidence is already sufficient; for easy questions or dense corpus coverage, claim expansion fires unnecessarily—mitigated by gating claim extraction on avg_relevance < SPARKIT_CLAIM_EXPANSION_RELEVANCE_THRESHOLD (default 1.5) so it only activates when Round 1 evidence quality is detectably low, matching the adaptive retrieval philosophy already present in engine.py."
+  ]
+}
+```

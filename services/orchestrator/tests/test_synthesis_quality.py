@@ -6,9 +6,11 @@ from services.orchestrator.app.engine import (
     _abstain_reasons,
     _anchor_coverage,
     _build_mcq_option_judge_prompt,
+    _build_mcq_option_elimination_prompt,
     _build_mcq_option_scoring_prompt,
     _build_claim_clusters,
     _build_option_evidence_packs,
+    _build_option_dossiers,
     _build_round_queries_from_plan,
     _build_section_summaries,
     _build_synthesis_prompt,
@@ -16,6 +18,7 @@ from services.orchestrator.app.engine import (
     _has_discriminative_option_scores,
     _mcq_lexical_option_scores,
     _parse_mcq_option_scores,
+    _parse_mcq_option_elimination,
     _extract_lexical_anchors,
     _record_identity,
     _env_bool,
@@ -24,6 +27,7 @@ from services.orchestrator.app.engine import (
     _record_relevance_score,
     _select_confident_blended_option,
     _select_best_section_chunk,
+    _select_option_from_dossiers,
     _select_records_for_ingestion,
     _split_question_and_choices,
 )
@@ -247,6 +251,23 @@ def test_mcq_option_scoring_prompt_has_required_format() -> None:
     assert "Evidence:" in prompt
 
 
+def test_mcq_option_elimination_prompt_and_parser() -> None:
+    prompt = _build_mcq_option_elimination_prompt(
+        question="Which choice is correct?",
+        answer_choices={"A": "up", "B": "down"},
+        claim_texts=["Evidence supports up-regulation."],
+        option_dossiers={
+            "A": {"support_snippets": ["up-regulation observed"], "counter_snippets": []},
+            "B": {"support_snippets": [], "counter_snippets": ["contradicted by evidence"]},
+        },
+    )
+    assert "A: KEEP" in prompt
+    assert "B: ELIMINATE" in prompt
+    parsed = _parse_mcq_option_elimination("A: KEEP\nB: ELIMINATE", {"A": "x", "B": "y"})
+    assert parsed["A"] == "KEEP"
+    assert parsed["B"] == "ELIMINATE"
+
+
 def test_option_score_discrimination_guard() -> None:
     assert _has_discriminative_option_scores({}) is False
     flat = {
@@ -259,6 +280,34 @@ def test_option_score_discrimination_guard() -> None:
         "B": {"support": 0.7, "contradiction": 0.1, "net": 0.6},
     }
     assert _has_discriminative_option_scores(varied) is True
+
+
+def test_option_dossiers_capture_support_and_counter() -> None:
+    dossiers = _build_option_dossiers(
+        stem="What is the key disadvantage?",
+        answer_choices={
+            "A": "oxygen instability",
+            "B": "wide fwhm due to multiple emissions",
+            "C": "low luminance from quenching",
+        },
+        claim_texts=[
+            "Radical OLED systems show broad FWHM and multiple emission bands.",
+            "The molecule is air stable and not oxygen unstable.",
+        ],
+        section_summaries=[{"section": "results", "summary": "Broad FWHM dominates line shape."}],
+    )
+    assert dossiers["B"]["support_snippets"]
+    assert isinstance(dossiers["A"]["counter_snippets"], list)
+
+
+def test_select_option_from_dossiers_requires_margin() -> None:
+    dossiers = {
+        "A": {"dossier_score": 1.0},
+        "B": {"dossier_score": 4.0},
+        "C": {"dossier_score": 1.5},
+    }
+    assert _select_option_from_dossiers(dossiers, min_top_score=2.0, min_margin=1.0) == "B"
+    assert _select_option_from_dossiers(dossiers, min_top_score=5.0, min_margin=1.0) is None
 
 
 def test_record_identity_prefers_doi_then_url() -> None:

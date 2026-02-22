@@ -1,0 +1,91 @@
+Now I have a thorough understanding of the codebase. Let me construct the proposal JSON.
+
+```json
+{
+  "proposal_id": "SPARKIT-2026-001-DTT",
+  "title": "Draft-Then-Target: Hypothesis-Prior Retrieval with Per-Claim Evidence Triangulation",
+  "distinctive_angle": "Invert SPARKIT's retrieve-first pipeline: run a cheap preliminary synthesis pass on first-round evidence to produce a draft answer with explicit falsifiable claims, convert those claims into targeted retrieval queries for subsequent rounds, link each retrieved passage back to the specific claim it supports or refutes, and rescore MCQ options by claim-level coverage—replacing the three fragmented MCQ scoring paths (dossier, scoring, elimination) with a single unified claim-triangulation graph rooted in per-claim evidence packs.",
+  "summary": "SPARKIT retrieves documents based on the question and answer choices, then synthesizes an answer from whatever is found. For very hard questions, the decisive evidence is typically in specific passages of specific papers that topic-level queries fail to surface. Draft-Then-Target (DTT) inserts a cheap hypothesis-drafting step after retrieval round 1: a fast provider (Kimi K2 or DeepSeek) produces a draft answer with 4-8 explicit factual sub-claims, each claim becomes a targeted retrieval query injected into round 2 as a new intent category ('claim_verification'), retrieved passages are scored per-claim rather than per-option, and the final answer is selected by whichever option has the highest claim-coverage ratio across its associated evidence pack. This closes the critical gap between topically-adjacent retrieval and claim-specific retrieval that currently limits accuracy on hard STEM questions.",
+  "reasoning": "The root cause of SPARKIT failures on hard questions is a semantic gap: current intent_queries and option_hypothesis_queries retrieve papers about the topic but systematically miss papers that specifically measure, prove, or refute the answer's key factual claims. For example, for 'What is the radiative lifetime of the A state of X at 300 K?', SPARKIT retrieves papers about X but may skip the 2019 laser-induced fluorescence study that directly measured this lifetime. DTT generates 'radiative lifetime X A-state 300K spectroscopy' as a claim-targeted query after the draft answer mentions a specific numerical value. This specificity jump is not achievable from the question alone. Additionally, the current MCQ pipeline has three competing decision paths (dossier score, blended option score from LLM, elimination) that can disagree and fall through to raw provider output—the unified claim-triangulation path eliminates this fragmentation and makes the scoring decision interpretable and correctable. Evidence from the RAG literature (HyDE, iterative retrieval augmented generation) confirms that hypothesis-conditioned queries consistently outperform question-conditioned queries on domain-specific factual recall tasks.",
+  "expected_impact": {
+    "accuracy_delta_pct_points": 5,
+    "cost_impact": "increase",
+    "latency_impact": "increase",
+    "confidence": "medium"
+  },
+  "implementation_plan": [
+    {
+      "step": "Add _draft_synthesis_pass(question, records, provider_client) in engine.py: call the cheapest available configured provider (Kimi K2 > DeepSeek > any available) with a 150-token prompt asking for a draft answer followed by 4-8 numbered falsifiable factual sub-claims, one per line. Run after the first retrieval round, before round 2 query construction. Return (draft_text: str, claims: list[str]).",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Add _claims_to_retrieval_queries(claims: list[str], stem: str, max_items: int = 10) in engine.py: strip stopwords from each claim, extract noun phrases and named entities, append 'evidence', 'measurement', 'experiment', or 'study' per claim type heuristic, and return deduplicated query strings via existing _dedupe_queries(). Cap at max_items to stay within budget.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Extend _heuristic_retrieval_plan() and _decompose_retrieval() in engine.py to accept an optional claim_queries: list[str] parameter. When provided, merge them into intent_queries under a new 'claim_verification' key. In execute_orchestration(), pass the output of _claims_to_retrieval_queries() into the round 2 stage construction so Brave and academic sources are queried with claim-specific strings.",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Add _score_passage_for_claim(claim_text: str, passage_text: str) -> float in engine.py using the existing _tokenize() and token-overlap logic: compute (2.0 * claim_token_overlap / max(1, len(claim_tokens))) + phrase_hit_bonus(0.4). This is intentionally lightweight to keep latency low during post-ingestion claim linking.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Add _build_claim_evidence_map(claims: list[str], claim_evidences: list[ClaimEvidence]) -> dict[str, list[tuple[float, str]]] in engine.py: for each claim, score all ClaimEvidence passages via _score_passage_for_claim, keep the top-3 scored passages per claim, and return a dict keyed by claim text. This replaces the per-option dossier construction for MCQ questions and supplements it for free-form questions.",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Add _compute_claim_coverage_rate(claim_evidence_map: dict[str, list[tuple[float, str]]], min_passage_score: float = 0.25) -> float: count claims with at least one passage above min_passage_score, divide by total claims. Expose as a new QualityGates field (claim_coverage_rate: float | None) and wire it into _abstain_reasons(): add 'claim_coverage_below_threshold' trigger when rate < 0.4 and retrieved_count >= min_sources.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Replace the current three-path MCQ selection cascade (dossier → blended score → elimination) in execute_orchestration() with a claim-triangulation scorer: for each MCQ option, compute coverage = (# claims in claim_evidence_map where the top-scored passage contains choice tokens) / total_claims. Blend with the existing lexical score: final_score = 0.6 * claim_coverage + 0.4 * lexical_score. Select the option with the highest final_score if margin >= 0.08, else fall through to the existing LLM scoring path as a tiebreaker.",
+      "owner": "orchestrator",
+      "effort": "high"
+    },
+    {
+      "step": "Add a budget guard around the draft synthesis pass in execute_orchestration(): skip DTT if remaining budget < $0.05 or elapsed_s > 0.7 * max_latency_s. Emit a 'draft_synthesis_skipped' trace stage with reason. This preserves the existing fast path for budget-constrained runs.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Extend the synthesis prompt builder (_build_synthesis_prompt or equivalent) to include a 'Claim verification status' section listing each draft claim and its coverage score (e.g., 'SUPPORTED (0.82)', 'WEAK (0.18)', 'NOT FOUND'). This allows the synthesis LLM to self-caveat on uncovered claims and avoid hallucinating specific values that lack evidence.",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Add tests in test_synthesis_quality.py: (a) _draft_synthesis_pass returns non-empty claims list; (b) _claims_to_retrieval_queries produces valid deduplicated query strings with no MCQ scaffolding; (c) _build_claim_evidence_map returns correct top-3 passages per claim; (d) _compute_claim_coverage_rate returns correct float; (e) claim-based MCQ scorer selects correct option when claim evidence strongly favors one choice.",
+      "owner": "orchestrator-tests",
+      "effort": "medium"
+    }
+  ],
+  "retrieval_improvements": [
+    "Claim-derived targeted queries (round 2+): after the draft synthesis pass, each extracted sub-claim becomes a retrieval query via _claims_to_retrieval_queries(), injected as intent_queries['claim_verification']. These queries are narrow and specific (e.g., 'photoionization cross section X 15 eV measurement') where generic topic queries are broad (e.g., 'X photoionization'), dramatically improving recall for the decisive numerical/mechanistic detail the question actually tests.",
+    "Option-hypothesis claim expansion: extend _build_option_hypothesis_queries() to generate not just '{stem} {choice}' but also '{stem} {choice} evidence', '{stem} why not {choice}', and 'mechanism by which {choice} in {stem_topic}'—tripling the semantic coverage of choice-specific queries without changing the deduplication budget (max_items cap is already enforced).",
+    "Evidence-gap adversarial retrieval: after claim-evidence mapping, collect claims with coverage_score < 0.2 (uncovered claims). For each, append 'negative results' and 'contradictory findings' to generate adversarial queries and run a targeted Brave search call. This ensures SPARKIT cannot miss the single paper that disproves a plausible-sounding draft claim, the most common failure mode on hard experimental questions.",
+    "Section-priority ingestion for claim-targeted records: when a retrieved record was fetched in response to a claim_verification query, increase its ingestion priority weight by 1.5x in _select_records_for_ingestion() so that claim-targeted papers are never crowded out by source-diversity filling in the second pass. Implement by tagging LiteratureRecord with an optional retrieval_intent: str field.",
+    "Temporal citation chaining for mechanism questions: for questions where _infer_task_type() returns 'mechanism', after initial ingestion extract DOIs cited in retrieved papers' references sections (via regex on raw HTML), add them as candidate records with source='citation_chain' and year inherited from citing paper, then score and select normally. This enables multi-hop evidence traversal (paper A cites paper B which contains the key rate constant) without requiring a new external API."
+  ],
+  "evaluation_plan": [
+    "Claim coverage rate on HLE-25 benchmark subset: for each question, measure _compute_claim_coverage_rate() before and after DTT round 2. A successful DTT run should increase mean claim coverage from the pre-DTT baseline by >= 0.15 (absolute) on questions where SPARKIT currently gets the wrong answer.",
+    "Answer stability under query perturbation: for 20 hard questions from the HLE-gold set, generate 3 paraphrased query variants per question (swap synonyms, reorder clauses) and run the full pipeline for each variant. Measure answer agreement rate across variants. DTT should increase agreement rate by at least 10 percentage points compared to baseline, since claim-targeted queries are less sensitive to surface form.",
+    "MCQ decision margin delta: on all MCQ questions in HLE-25, compare (top1_score - top2_score) before and after the claim-triangulation scorer replaces the three-path cascade. A wider margin indicates more decisive evidence selection. Target: mean margin increases by >= 0.05 on questions where DTT changes the selected option.",
+    "False positive claim retrieval rate: manually audit 30 claim-targeted queries (10 questions × 3 claims each) to verify that retrieved papers actually contain evidence for the claimed fact. Target: >= 75% of claim-targeted queries return at least one directly relevant passage in the top-3 ingested docs, vs. the estimated 45-55% for current generic queries on hard questions.",
+    "Cost and latency overhead characterization: measure p50 and p95 latency increase and cost increase from adding the draft synthesis pass + claim_verification round across 50 HLE-25 runs. Target: latency increase < 30%, cost increase < $0.40 per run at research_max mode. If either threshold is exceeded, the budget guard in step 8 of the implementation plan must be tuned to skip DTT more aggressively.",
+    "Abstention gate calibration check: verify that the new 'claim_coverage_below_threshold' abstention trigger does not increase false-abstention rate (refusing to answer questions that have a correct answer). Run the HLE-gold triplicate set and check that abstention rate increases by < 5 percentage points on answerable questions. If it increases more, raise the abstention threshold from 0.4 to 0.5."
+  ],
+  "risks": [
+    "Confirmation bias in retrieval: if the draft answer is wrong (which is common on hard questions), the claim-targeted queries will search for evidence of incorrect facts, potentially surfacing misleading papers that superficially match wrong claim tokens. Mitigation: always include adversarial gap retrieval (improvement #3) and preserve the existing adversarial round queries in parallel with claim_verification queries so correct contradictory evidence can still be found.",
+    "Draft synthesis quality depends on first-round evidence quality: on questions where academic API retrieval round 1 surfaces few relevant papers, the draft will be generic or wrong and generate low-signal claim queries. Mitigation: the budget guard (step 8) should also check that round 1 ingested at least min_sources docs with mean relevance score > 1.5 before attempting DTT; otherwise skip and fall through to the existing pipeline.",
+    "Cost increase may exceed budget ceiling: the draft synthesis call adds one LLM invocation, and the claim_verification intent adds Brave search calls (at $0.005 each) and academic API queries. For a max_cost_usd=$3.00 run already near budget, this may trigger the cost guard before the final synthesis runs. Mitigation: use the cheapest available provider for the draft pass; explicitly reserve $0.20 for DTT in the budget state before round 1 if research_max mode is active.",
+    "Claim extraction parsing failures: if the draft model does not produce numbered claims in the expected format (e.g., it outputs prose without explicit claim lines), _claims_to_retrieval_queries() will receive empty or garbled input and generate useless queries. Mitigation: add a regex-based claim extractor with a fallback that splits the draft on sentence boundaries and uses each sentence as a claim; this degrades gracefully to sentence-level retrieval queries rather than failing entirely.",
+    "MCQ claim-triangulation scorer may underperform three-path cascade on simple questions: for questions where lexical dossier already gives a clear answer (margin >> 0.08), the new blended scorer's additional claim coverage step adds latency without benefit. Mitigation: fast-exit if _select_option_from_dossiers() already returns a confident selection (top_score >= 3.0, margin >= 2.0); skip DTT's claim rescore and proceed directly to synthesis."
+  ]
+}
+```

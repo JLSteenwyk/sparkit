@@ -1,0 +1,90 @@
+```json
+{
+  "proposal_id": "SPARKIT-CITEGRAPH-2026-001",
+  "title": "Citation Graph Triangulation with Cross-Source Claim Consensus Scoring and Anchor Paper Discovery",
+  "distinctive_angle": "Instead of treating each retrieved paper as an independent evidence unit, traverse the citation graph of top-ranked retrieved papers via Semantic Scholar's references/citations API to discover 'anchor papers' (co-cited by multiple independently retrieved documents), then score every extracted claim by cross-source consensus — rewarding claims independently corroborated by three or more distinct publication venues and flagging contested claims where similar factual statements appear with conflicting values across independent sources. This converts SPARKIT's evidence model from a flat ranked list to a bibliometrically-grounded triangulation graph, mirroring how systematic reviews distinguish robust findings from single-study artifacts.",
+  "summary": "SPARKIT currently scores retrieved evidence by lexical token overlap plus small source bonuses, treating papers as independent units. This proposal adds a post-retrieval citation graph walk using Semantic Scholar's /paper/{id}/references endpoint (authenticated via the existing SEMANTIC_SCHOLAR_API_KEY already in the adapter layer), identifies anchor papers co-cited by two or more independently retrieved documents, and prioritizes them for ingestion. After claim extraction, claims are grouped by semantic similarity across sources and scored by cross-source consensus count. Synthesis receives explicit epistemic tier annotations per evidence bullet. Contested claims where the same dimension reports conflicting values trigger a targeted clarification retrieval query. Calibration gains two new features: citation_consensus_score and contested_claim_count. The entire pipeline degrades gracefully when SS IDs are unavailable and is gated on a SPARKIT_ENABLE_CITATION_GRAPH env flag.",
+  "reasoning": "HLE-149 benchmark performance plateaus at 0.637 rubric despite multi-round retrieval because hard questions target well-established but non-obvious scientific facts found predominantly in highly-cited review papers and seminal works — documents that do not surface via direct keyword matching due to domain vocabulary mismatches and synonym gaps. Citation graph traversal discovers these authoritative sources organically: if an arXiv preprint, a Crossref journal article, and a PubMed clinical study all independently cite the same 2019 Nature paper as their methodological baseline, that paper is extremely likely to contain the correct answer regardless of query-term overlap. Cross-source consensus scoring directly addresses the failure mode where SPARKIT retrieves three papers from arXiv that all copy the same incorrect number from each other (inflating apparent support coverage) while a contradicting PMC clinical result is ranked lower due to vocabulary mismatch. The calibration formula currently rewards evidence_count and support_coverage without distinguishing corroborated evidence from single-lab claims — consensus scoring makes this distinction first-class. Contested claim detection is more precise than the current eight-keyword marker scan because it uses numeric value divergence across independently retrieved sources rather than lexical proximity to words like 'contradict', catching real scientific disagreements that are phrased neutrally in the literature.",
+  "expected_impact": {
+    "accuracy_delta_pct_points": 6,
+    "cost_impact": "mixed",
+    "latency_impact": "increase",
+    "confidence": "medium"
+  },
+  "implementation_plan": [
+    {
+      "step": "Add two citation graph client methods to services/retrieval_service/app/adapters.py using the existing SS adapter session: get_paper_references(paper_id, limit=50) and get_paper_citations(paper_id, limit=25), both querying https://api.semanticscholar.org/graph/v1/paper/{id}/references and /citations. Accept DOI format as DOI:{doi} for papers without native SS IDs. Return list of (external_doi, external_title, external_year) tuples.",
+      "owner": "retrieval_service",
+      "effort": "low"
+    },
+    {
+      "step": "Implement anchor_paper_discovery() in services/retrieval_service/app/aggregator.py: after all retrieval rounds complete, collect DOIs from top-15 retrieved records (by current relevance score), call get_paper_references() for each in asyncio.gather(), count co-citation frequency per external DOI, select records with co_citation_count >= 2 as anchor_candidates, return top-5 ordered by co_citation_count. Bound total SS calls to SPARKIT_SS_CITATION_GRAPH_MAX_CALLS (default 15).",
+      "owner": "retrieval_service",
+      "effort": "medium"
+    },
+    {
+      "step": "Integrate anchor paper ingestion priority into _select_records_for_ingestion() in services/orchestrator/app/engine.py: anchor candidates get is_anchor_paper=True flag and a relevance score boost of 1.5x. Anchor papers fill ingestion slots before the standard source-diversity second pass, up to a cap of 3 anchor papers per run to avoid anchor paper monoculture. Log anchor_papers_used count in run_observability_metrics.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Add cross-source consensus scoring in the claim extraction stage of engine.py after _extract_claims_from_passages(): group claims by token overlap >= 0.60 on core noun phrases, for each group count distinct source_domain values (arxiv.org, pubmed.ncbi.nlm.nih.gov, semanticscholar.org, crossref.org counted as distinct), compute consensus_score = min(1.0, distinct_source_count / 3.0), tag claims with consensus_confirmed (score >= 0.67) or single_source (score < 0.34).",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Implement contested claim detection within the consensus grouping step: for each claim group, regex-extract numeric values with units from claim text, compare values across sources, if max_value / min_value > 1.15 (15% divergence) and noun phrase overlap >= 0.50 in surrounding context, flag group as contested with specific_discord listing (value, source_doi, year) tuples. Route contested claims to verifier stage as adversarial candidates bypassing keyword-marker prerequisite.",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "For each contested claim, launch a targeted clarification retrieval query via the existing Brave or arXiv adapter: construct query as 'meta-analysis {claim_dimension} {value_a} vs {value_b}', add results to ingestion candidate pool with clarification_query=True metadata. Gate this step on SPARKIT_ENABLE_CONTESTED_CLARIFICATION=1 and budget_state.estimated_remaining_cost_usd > 0.003.",
+      "owner": "orchestrator",
+      "effort": "medium"
+    },
+    {
+      "step": "Update _build_synthesis_prompt() in engine.py to stratify evidence bullets by consensus tier: prefix consensus_confirmed bullets with '[corroborated by N sources]', single_source bullets with '[single source]', contested bullets with '[contested: {value_a} vs {value_b}]'. Apply tier annotations only to top-12 evidence bullets; strip annotations if estimated prompt token count exceeds synthesis_max_tokens * 0.85 to avoid truncation.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Add citation_consensus_score (mean consensus_score across all claim groups, 0-1) and contested_claim_count (integer) to CalibrationFeatures dataclass in services/orchestrator/app/calibration.py. Update calibrate_answer() formula: add +0.08 * citation_consensus_score - 0.04 * min(1.0, contested_claim_count / 3.0) to raw confidence. Create Alembic migration to add citation_consensus_score and contested_claim_count columns to run_calibration_features table.",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Run citation graph traversal in parallel with the ingestion stage using asyncio.gather() so anchor paper discovery adds no sequential latency when ingestion is the bottleneck. Add SPARKIT_ENABLE_CITATION_GRAPH=1 env flag (default 1) to gate the entire feature. Implement exponential backoff on SS 429 responses using the existing direct-call retry pattern (DIRECT_CALL_MAX_ATTEMPTS, DIRECT_CALL_RETRY_BACKOFF_S).",
+      "owner": "orchestrator",
+      "effort": "low"
+    },
+    {
+      "step": "Write unit tests in services/orchestrator/tests/: test anchor paper discovery with mock SS reference responses producing known co-citation counts, test consensus scoring across multi-source claim groups with expected tier assignments, test contested claim detection with pairs of claims reporting numeric values diverging by 20% vs 5% (boundary), test synthesis prompt stratification output format and token budget fallback stripping.",
+      "owner": "orchestrator/tests",
+      "effort": "medium"
+    }
+  ],
+  "retrieval_improvements": [
+    "Citation graph walk via Semantic Scholar /paper/{id}/references API discovers anchor papers widely co-cited by the retrieved set but absent from keyword query results due to vocabulary mismatch — specifically targeting foundational review papers and seminal works that are the actual source of correct answers on hard benchmark questions, using bibliometric centrality (co-citation count) as a retrieval signal that is orthogonal to and complementary with lexical overlap.",
+    "Co-citation frequency as a first-class relevance boost: papers referenced by two or more independently retrieved documents receive a 1.5x relevance multiplier and ingestion priority. This operationalizes the principle that if multiple independent retrieval paths converge on the same external reference, that convergence is a strong signal of relevance — replacing the current flat source bonus (+0.01 to +0.03) that does not distinguish between central and peripheral papers in the citation network.",
+    "Lateral citation discovery via /paper/{id}/citations endpoint for top-3 anchor papers surfaces recent work building on authoritative baselines — capturing 2024-2026 results that refine or extend anchor paper findings. This directly addresses the recency gap in SPARKIT's retrieval for fast-moving STEM domains where the definitive answer may appear in a 2025 paper that cites the 2019 anchor paper identified by co-citation counting.",
+    "Contested claim-driven targeted clarification queries: when claim extraction detects two sources independently reporting conflicting numeric values for the same scientific dimension (e.g., 68% vs 74% accuracy on the same benchmark), a focused meta-analysis query is automatically launched via the Brave or arXiv adapter. This converts retrieval failures from silent evidence gaps into explicit disambiguation steps, directly addressing questions where the correct answer depends on which conflicting value is the current scientific consensus.",
+    "Cross-source deduplication upgrade at the claim level: current deduplication stops at the paper level (by DOI/URL), allowing multiple claims from different passages of related papers to inflate apparent evidence volume. Grouping claims by semantic similarity (token overlap >= 0.60) and scoring by distinct source domain count eliminates redundant evidence at the claim level, freeing synthesis context budget for genuinely diverse evidence and preventing over-confidence from correlated sources."
+  ],
+  "evaluation_plan": [
+    "HLE-149 full re-run with SPARKIT_ENABLE_CITATION_GRAPH=1 vs matched baseline (citation_graph=0) on the same single_grok configuration (current best at 0.637 rubric): compare rubric score, accuracy, support_coverage, ECE, and Brier score. Target >= +3 pct points rubric improvement attributable to anchor paper discovery, measured by checking whether anchor papers were the primary cited evidence source in correctly-answered questions that were previously wrong.",
+    "Anchor paper hit rate audit: for each question answered correctly in citation_graph=1 run but incorrectly in citation_graph=0 baseline, verify whether an anchor paper (is_anchor_paper=True in observability metrics) was the source of the decisive evidence claim. Report anchor_paper_hit_rate = correct_flips_using_anchor / total_correct_flips as the primary mechanism validation metric.",
+    "Cross-source consensus calibration validation: split all extracted claims into consensus_confirmed tier (consensus_score >= 0.67) and single_source tier (consensus_score < 0.34), compute ECE and Brier score separately for each tier across the HLE-149 run. Expect consensus_confirmed ECE <= 0.08 vs single_source ECE >= 0.15, confirming that cross-source corroboration is a reliable calibration signal and validating the +0.08 * citation_consensus_score calibration weight.",
+    "Contested claim adversarial accuracy test: partition HLE-149 questions into contested_detected (at least one contested claim flagged) vs no_contest groups. Compare rubric scores between groups in both baseline and citation_graph=1 runs. Expect: contested group has lower baseline rubric (harder questions) but shows larger improvement (+5 to +8 pct points) vs no_contest group (+2 to +4 pct points), validating that contested claim clarification retrieval is targeting the right failure mode.",
+    "Latency budget regression: measure p50 and p95 wall-clock latency for citation_graph=1 vs baseline across 50 questions. With asyncio.gather parallelization of citation graph traversal and ingestion, target p95 latency increase <= 800ms over baseline. If p95 exceeds 1.5x baseline, implement SS response caching in Postgres keyed by DOI to eliminate redundant graph calls across questions sharing retrieved papers.",
+    "SS API call volume and cost regression: instrument SPARKIT_SS_CITATION_GRAPH_MAX_CALLS enforcement by logging actual ss_citation_graph_calls_made per run in run_observability_metrics. Verify calls_made <= SPARKIT_SS_CITATION_GRAPH_MAX_CALLS (default 15) across all 149 HLE questions. Confirm cost_usd increase per question is <= $0.001 (SS academic API is free-tier with key, cost is only Brave clarification queries at $0.005 each, expected in ~15% of questions)."
+  ],
+  "risks": [
+    "Semantic Scholar rate limits under concurrent benchmark load: the academic API supports 100 req/s with API key, but citation graph queries add 10-15 calls per question, and running 10 concurrent HLE questions generates 100-150 simultaneous SS calls that may trigger 429 throttling. Mitigation: implement a shared asyncio semaphore capping concurrent SS citation graph requests at 5 globally (SPARKIT_SS_CITATION_GRAPH_CONCURRENCY=5), use the existing exponential backoff retry pattern, and cache citation graph responses in Postgres keyed by paper DOI with a 7-day TTL to eliminate redundant calls for papers appearing across multiple questions.",
+    "Anchor paper SS ID resolution failures: not all retrieved papers have resolvable Semantic Scholar IDs — arXiv preprints without assigned DOIs, Europe PMC records with PMID but no SS indexing, and very recent 2025-2026 papers not yet indexed by SS will silently fail citation graph traversal. Mitigation: implement graceful degradation (skip citation graph for papers without resolvable SS ID, log resolution_failure_rate in observability), ensure anchor paper discovery supplements but never blocks standard retrieval, and fall back to the standard ingestion selection path when fewer than 5 papers have resolvable IDs.",
+    "Cross-source consensus false positives from self-plagiarism and paper families: two papers may use near-identical abstract text (preprint vs published version, companion papers from same lab) inflating apparent independent consensus. Mitigation: add author list deduplication — if two sources share >= 40% of first authors (Jaccard on author name tokens), count them as a single source for consensus scoring regardless of different DOIs or venues.",
+    "Contested claim false positives from unit or context mismatches: numeric value extraction regex may misparse claims where 74% accuracy and 74% recall appear as conflicting values for the same dimension when they are measuring different things. Mitigation: require noun phrase overlap >= 0.50 in a 30-token window around each numeric value before treating divergence as contested; add unit normalization step (normalize percentages, convert K/M/B numeric scales before comparison); set contested detection to require divergence > 15% not just any difference.",
+    "Synthesis prompt length inflation from consensus tier annotations: adding [corroborated by N sources] and [contested: X vs Y] prefixes to evidence bullets increases prompt token count, potentially breaching provider context limits for questions already generating long synthesis prompts. Mitigation: apply tier annotations only to top-12 evidence bullets sorted by relevance, strip all annotations if estimated total prompt tokens exceed synthesis_max_tokens * 0.85, and treat annotation stripping as a graceful degradation that preserves core evidence without breaking synthesis.",
+    "Anchor paper monoculture risk: if the top anchor paper has extremely high co-citation count (e.g., a foundational BERT or AlphaFold paper cited by every retrieved document), it crowds out 3 of the 3 anchor ingestion slots with variations of the same source, reducing rather than increasing evidence diversity. Mitigation: cap anchor paper ingestion at 3 slots per run and apply source domain deduplication to anchor candidates (same venue/institution counts as one anchor slot), ensuring anchor papers span at least 2 distinct source domains."
+  ]
+}
+```
