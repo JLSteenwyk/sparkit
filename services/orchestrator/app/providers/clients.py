@@ -31,6 +31,38 @@ class BaseProviderClient:
         raise NotImplementedError
 
 
+def _error_result(provider: str, model: str, started: float, error: str) -> GenerationResult:
+    return GenerationResult(
+        provider=provider,
+        model=model,
+        text="",
+        success=False,
+        latency_s=max(0.0, perf_counter() - started),
+        error=error,
+    )
+
+
+def _openai_like_usage(data: dict) -> tuple[int, int, int]:
+    usage = data.get("usage", {}) or {}
+    return (
+        int(usage.get("prompt_tokens", 0) or 0),
+        int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)) or 0),
+        int(usage.get("completion_tokens", 0) or 0),
+    )
+
+
+def _openai_like_text(data: dict, *, allow_reasoning_fallback: bool) -> str:
+    message = (data.get("choices") or [{}])[0].get("message") or {}
+    text = str(message.get("content", "") or "")
+    if text.strip():
+        return text
+    if allow_reasoning_fallback:
+        reasoning = str(message.get("reasoning_content", "") or "")
+        if reasoning.strip():
+            return reasoning
+    return ""
+
+
 def _default_timeout_for_provider(provider: str) -> float:
     tuned_defaults = {
         "grok": 60.0,
@@ -84,42 +116,30 @@ class OpenAICompatibleClient(BaseProviderClient):
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
             data = response.json()
-            message = (data.get("choices") or [{}])[0].get("message") or {}
-            text = str(message.get("content", "") or "")
+            text = _openai_like_text(data, allow_reasoning_fallback=self.provider == "deepseek")
             if not text.strip():
-                reasoning = str(message.get("reasoning_content", "") or "")
-                if self.provider == "deepseek" and reasoning.strip():
-                    text = reasoning
-                else:
-                    reason_suffix = " with reasoning_content" if reasoning.strip() else ""
-                    return GenerationResult(
-                        provider=self.provider,
-                        model=self.model,
-                        text="",
-                        success=False,
-                        latency_s=max(0.0, perf_counter() - started),
-                        error=f"empty_content{reason_suffix}",
-                    )
-            usage = data.get("usage", {}) or {}
+                message = (data.get("choices") or [{}])[0].get("message") or {}
+                has_reasoning = str(message.get("reasoning_content", "") or "").strip() != ""
+                reason_suffix = " with reasoning_content" if has_reasoning else ""
+                return _error_result(
+                    provider=self.provider,
+                    model=self.model,
+                    started=started,
+                    error=f"empty_content{reason_suffix}",
+                )
+            tokens_input, tokens_input_cached, tokens_output = _openai_like_usage(data)
             return GenerationResult(
                 provider=self.provider,
                 model=self.model,
                 text=text,
                 success=True,
-                tokens_input=int(usage.get("prompt_tokens", 0) or 0),
-                tokens_input_cached=int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)) or 0),
-                tokens_output=int(usage.get("completion_tokens", 0) or 0),
+                tokens_input=tokens_input,
+                tokens_input_cached=tokens_input_cached,
+                tokens_output=tokens_output,
                 latency_s=max(0.0, perf_counter() - started),
             )
         except Exception as exc:  # noqa: BLE001
-            return GenerationResult(
-                provider=self.provider,
-                model=self.model,
-                text="",
-                success=False,
-                latency_s=max(0.0, perf_counter() - started),
-                error=str(exc),
-            )
+            return _error_result(provider=self.provider, model=self.model, started=started, error=str(exc))
 
 
 class OpenAIClient(BaseProviderClient):
@@ -179,15 +199,8 @@ class OpenAIClient(BaseProviderClient):
 
             # Chat Completions format.
             if "choices" in data:
-                message = (data.get("choices") or [{}])[0].get("message") or {}
-                text = str(message.get("content", "") or "")
-                if not text.strip():
-                    reasoning = str(message.get("reasoning_content", "") or "")
-                    if reasoning.strip():
-                        text = reasoning
-                tokens_input = int(usage.get("prompt_tokens", 0) or 0)
-                tokens_input_cached = int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)) or 0)
-                tokens_output = int(usage.get("completion_tokens", 0) or 0)
+                text = _openai_like_text(data, allow_reasoning_fallback=True)
+                tokens_input, tokens_input_cached, tokens_output = _openai_like_usage(data)
             else:
                 # Responses format.
                 text = str(data.get("output_text", "") or "")
@@ -204,14 +217,7 @@ class OpenAIClient(BaseProviderClient):
                 tokens_output = int(usage.get("output_tokens", 0) or 0)
 
             if not text.strip():
-                return GenerationResult(
-                    provider=self.provider,
-                    model=self.model,
-                    text="",
-                    success=False,
-                    latency_s=max(0.0, perf_counter() - started),
-                    error="empty_content",
-                )
+                return _error_result(provider=self.provider, model=self.model, started=started, error="empty_content")
 
             return GenerationResult(
                 provider=self.provider,
@@ -224,14 +230,7 @@ class OpenAIClient(BaseProviderClient):
                 latency_s=max(0.0, perf_counter() - started),
             )
         except Exception as exc:  # noqa: BLE001
-            return GenerationResult(
-                provider=self.provider,
-                model=self.model,
-                text="",
-                success=False,
-                latency_s=max(0.0, perf_counter() - started),
-                error=str(exc),
-            )
+            return _error_result(provider=self.provider, model=self.model, started=started, error=str(exc))
 
 
 class AnthropicClient(BaseProviderClient):
@@ -308,14 +307,7 @@ class AnthropicClient(BaseProviderClient):
                 latency_s=max(0.0, perf_counter() - started),
             )
         except Exception as exc:  # noqa: BLE001
-            return GenerationResult(
-                provider=self.provider,
-                model=self.model,
-                text="",
-                success=False,
-                latency_s=max(0.0, perf_counter() - started),
-                error=str(exc),
-            )
+            return _error_result(provider=self.provider, model=self.model, started=started, error=str(exc))
 
 
 class KimiClient(BaseProviderClient):
@@ -346,41 +338,22 @@ class KimiClient(BaseProviderClient):
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
             data = response.json()
-            message = (data.get("choices") or [{}])[0].get("message") or {}
-            text = str(message.get("content", "") or "")
+            text = _openai_like_text(data, allow_reasoning_fallback=True)
             if not text.strip():
-                reasoning = str(message.get("reasoning_content", "") or "")
-                if reasoning.strip():
-                    text = reasoning
-                else:
-                    return GenerationResult(
-                        provider=self.provider,
-                        model=self.model,
-                        text="",
-                        success=False,
-                        latency_s=max(0.0, perf_counter() - started),
-                        error="empty_content",
-                    )
-            usage = data.get("usage", {}) or {}
+                return _error_result(provider=self.provider, model=self.model, started=started, error="empty_content")
+            tokens_input, tokens_input_cached, tokens_output = _openai_like_usage(data)
             return GenerationResult(
                 provider=self.provider,
                 model=self.model,
                 text=text,
                 success=True,
-                tokens_input=int(usage.get("prompt_tokens", 0) or 0),
-                tokens_input_cached=int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)) or 0),
-                tokens_output=int(usage.get("completion_tokens", 0) or 0),
+                tokens_input=tokens_input,
+                tokens_input_cached=tokens_input_cached,
+                tokens_output=tokens_output,
                 latency_s=max(0.0, perf_counter() - started),
             )
         except Exception as exc:  # noqa: BLE001
-            return GenerationResult(
-                provider=self.provider,
-                model=self.model,
-                text="",
-                success=False,
-                latency_s=max(0.0, perf_counter() - started),
-                error=str(exc),
-            )
+            return _error_result(provider=self.provider, model=self.model, started=started, error=str(exc))
 
 
 class GeminiClient(BaseProviderClient):
@@ -429,14 +402,7 @@ class GeminiClient(BaseProviderClient):
                 latency_s=max(0.0, perf_counter() - started),
             )
         except Exception as exc:  # noqa: BLE001
-            return GenerationResult(
-                provider=self.provider,
-                model=self.model,
-                text="",
-                success=False,
-                latency_s=max(0.0, perf_counter() - started),
-                error=str(exc),
-            )
+            return _error_result(provider=self.provider, model=self.model, started=started, error=str(exc))
 
 
 class DeepSeekClient(OpenAICompatibleClient):

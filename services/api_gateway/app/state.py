@@ -28,12 +28,126 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class RunExecutor:
+    def __init__(self, store: "RunStore") -> None:
+        self.store = store
+
+    def execute_run_if_needed(self, run_id: str) -> None:
+        run = self.store.get_run(run_id)
+        state = self.store.get_state(run_id)
+        if run is None or state is None:
+            return
+
+        if run.status in {Status.COMPLETED, Status.FAILED, Status.CANCELLED, Status.CANCELLING}:
+            return
+
+        started = _now_utc()
+        state["progress"] = Progress(stage="retrieval_round", percent=30)
+        running_state = self.store._serialize_state(state)  # noqa: SLF001 - store internal state serializer
+        self.store._update_run_fields(  # noqa: SLF001 - delegated update
+            run_id,
+            {
+                "status": Status.RUNNING.value,
+                "updated_at": started,
+                "progress_json": running_state["progress_json"],
+                "usage_json": running_state["usage_json"],
+                "answer_json": running_state["answer_json"],
+                "citations_json": running_state["citations_json"],
+                "trace_json": running_state["trace_json"],
+            },
+        )
+
+        try:
+            result = execute_orchestration(
+                run_id=run.run_id,
+                question=run.question,
+                min_sources=run.constraints.min_sources,
+                providers=run.providers,
+                mode=run.mode.value,
+                max_latency_s=run.constraints.max_latency_s,
+                max_cost_usd=run.constraints.max_cost_usd,
+                synthesis_max_tokens=run.constraints.synthesis_max_tokens,
+                prompt_version=run.prompt_version,
+                config_version=run.config_version,
+                reproducibility=run.reproducibility,
+            )
+        except Exception as exc:  # noqa: BLE001
+            ended = _now_utc()
+            fail_state = {
+                "progress": Progress(stage="failed", percent=100),
+                "usage": Usage(cost_usd=0.0, latency_s=max(0.0, (ended - started).total_seconds())),
+                "answer": None,
+                "citations": None,
+                "trace": RunTraceResponse(
+                    run_id=run_id,
+                    stages=[
+                        TraceStage(
+                            name="orchestration",
+                            status=Status.FAILED,
+                            started_at=started,
+                            ended_at=ended,
+                            artifacts={"error": str(exc)},
+                        )
+                    ],
+                    provider_usage=[],
+                    quality_gates=QualityGates(citation_coverage=0.0, unsupported_claims=1),
+                ),
+            }
+            payload = self.store._serialize_state(fail_state)  # noqa: SLF001 - delegated serializer
+            self.store._update_run_fields(  # noqa: SLF001 - delegated update
+                run_id,
+                {
+                    "status": Status.FAILED.value,
+                    "updated_at": ended,
+                    "progress_json": payload["progress_json"],
+                    "usage_json": payload["usage_json"],
+                    "answer_json": payload["answer_json"],
+                    "citations_json": payload["citations_json"],
+                    "trace_json": payload["trace_json"],
+                },
+            )
+            return
+
+        ended = _now_utc()
+        done_state = {
+            "progress": Progress(stage="completed", percent=100),
+            "usage": Usage(
+                cost_usd=sum(item.cost_usd for item in result.provider_usage),
+                latency_s=max(0.0, (ended - started).total_seconds()),
+                tokens_input=sum(item.tokens_input for item in result.provider_usage),
+                tokens_output=sum(item.tokens_output for item in result.provider_usage),
+            ),
+            "answer": result.answer,
+            "citations": result.citations,
+            "trace": RunTraceResponse(
+                run_id=run_id,
+                stages=result.stages,
+                provider_usage=result.provider_usage,
+                quality_gates=result.quality_gates,
+            ),
+        }
+        payload = self.store._serialize_state(done_state)  # noqa: SLF001 - delegated serializer
+        self.store._update_run_fields(  # noqa: SLF001 - delegated update
+            run_id,
+            {
+                "status": Status.COMPLETED.value,
+                "updated_at": ended,
+                "progress_json": payload["progress_json"],
+                "usage_json": payload["usage_json"],
+                "answer_json": payload["answer_json"],
+                "citations_json": payload["citations_json"],
+                "trace_json": payload["trace_json"],
+            },
+        )
+
+
 class RunStore:
     def __init__(self, database_url: str | None = None) -> None:
         self.database_url = database_url or os.getenv(
             "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/sparkit"
         )
         self._initialized = False
+        self._executor = RunExecutor(self)
 
     def _conn(self) -> psycopg.Connection:
         return psycopg.connect(self.database_url, row_factory=dict_row)
@@ -215,112 +329,7 @@ class RunStore:
             conn.commit()
 
     def execute_run_if_needed(self, run_id: str) -> None:
-        run = self.get_run(run_id)
-        state = self.get_state(run_id)
-        if run is None or state is None:
-            return
-
-        if run.status in {Status.COMPLETED, Status.FAILED, Status.CANCELLED, Status.CANCELLING}:
-            return
-
-        started = _now_utc()
-        state["progress"] = Progress(stage="retrieval_round", percent=30)
-        running_state = self._serialize_state(state)
-        self._update_run_fields(
-            run_id,
-            {
-                "status": Status.RUNNING.value,
-                "updated_at": started,
-                "progress_json": running_state["progress_json"],
-                "usage_json": running_state["usage_json"],
-                "answer_json": running_state["answer_json"],
-                "citations_json": running_state["citations_json"],
-                "trace_json": running_state["trace_json"],
-            },
-        )
-
-        try:
-            result = execute_orchestration(
-                run_id=run.run_id,
-                question=run.question,
-                min_sources=run.constraints.min_sources,
-                providers=run.providers,
-                mode=run.mode.value,
-                max_latency_s=run.constraints.max_latency_s,
-                max_cost_usd=run.constraints.max_cost_usd,
-                synthesis_max_tokens=run.constraints.synthesis_max_tokens,
-                prompt_version=run.prompt_version,
-                config_version=run.config_version,
-                reproducibility=run.reproducibility,
-            )
-        except Exception as exc:  # noqa: BLE001
-            ended = _now_utc()
-            fail_state = {
-                "progress": Progress(stage="failed", percent=100),
-                "usage": Usage(cost_usd=0.0, latency_s=max(0.0, (ended - started).total_seconds())),
-                "answer": None,
-                "citations": None,
-                "trace": RunTraceResponse(
-                    run_id=run_id,
-                    stages=[
-                        TraceStage(
-                            name="orchestration",
-                            status=Status.FAILED,
-                            started_at=started,
-                            ended_at=ended,
-                            artifacts={"error": str(exc)},
-                        )
-                    ],
-                    provider_usage=[],
-                    quality_gates=QualityGates(citation_coverage=0.0, unsupported_claims=1),
-                ),
-            }
-            payload = self._serialize_state(fail_state)
-            self._update_run_fields(
-                run_id,
-                {
-                    "status": Status.FAILED.value,
-                    "updated_at": ended,
-                    "progress_json": payload["progress_json"],
-                    "usage_json": payload["usage_json"],
-                    "answer_json": payload["answer_json"],
-                    "citations_json": payload["citations_json"],
-                    "trace_json": payload["trace_json"],
-                },
-            )
-            return
-
-        ended = _now_utc()
-        done_state = {
-            "progress": Progress(stage="completed", percent=100),
-            "usage": Usage(
-                cost_usd=sum(item.cost_usd for item in result.provider_usage),
-                latency_s=max(0.0, (ended - started).total_seconds()),
-                tokens_input=sum(item.tokens_input for item in result.provider_usage),
-                tokens_output=sum(item.tokens_output for item in result.provider_usage),
-            ),
-            "answer": result.answer,
-            "citations": result.citations,
-            "trace": RunTraceResponse(
-                run_id=run_id,
-                stages=result.stages,
-                provider_usage=result.provider_usage,
-                quality_gates=result.quality_gates,
-            ),
-        }
-        payload = self._serialize_state(done_state)
-        self._update_run_fields(
-            run_id,
-            {
-                "status": Status.COMPLETED.value,
-                "updated_at": ended,
-                "progress_json": payload["progress_json"],
-                "usage_json": payload["usage_json"],
-                "answer_json": payload["answer_json"],
-                "citations_json": payload["citations_json"],
-                "trace_json": payload["trace_json"],
-            },
-        )
+        self._executor.execute_run_if_needed(run_id)
 
 
 def make_run_id() -> str:
