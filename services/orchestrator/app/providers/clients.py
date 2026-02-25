@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from time import perf_counter
+import time
 
 import httpx
 
@@ -182,7 +183,7 @@ class OpenAIClient(BaseProviderClient):
                     response = client.post(responses_url, headers=headers, json=responses_payload)
                 else:
                     response = client.post(chat_url, headers=headers, json=chat_payload)
-                if response.status_code == 404 and self.model.startswith("gpt-5"):
+                if response.status_code in {400, 404} and self.model.startswith("gpt-5"):
                     # Some GPT-5 variants are served on /v1/responses only.
                     responses_payload: dict[str, object] = {
                         "model": self.model,
@@ -459,4 +460,43 @@ def generate_text(
             error=str(exc),
         )
     resolved_timeout = timeout_s if timeout_s is not None else _default_timeout_for_provider(provider)
-    return client.generate(prompt=prompt, max_tokens=max_tokens, timeout_s=resolved_timeout)
+    retries = max(0, int(os.getenv("SPARKIT_PROVIDER_RETRIES", "1") or "1"))
+    backoff_s = max(0.0, float(os.getenv("SPARKIT_PROVIDER_RETRY_BACKOFF_S", "0.7") or "0.7"))
+
+    def _is_transient(error: str | None) -> bool:
+        if not error:
+            return False
+        lowered = error.lower()
+        transient_markers = (
+            "timeout",
+            "timed out",
+            "connection reset",
+            "temporarily unavailable",
+            "429",
+            "500",
+            "502",
+            "503",
+            "504",
+            "rate limit",
+        )
+        return any(marker in lowered for marker in transient_markers)
+
+    last_result: GenerationResult | None = None
+    for attempt in range(retries + 1):
+        result = client.generate(prompt=prompt, max_tokens=max_tokens, timeout_s=resolved_timeout)
+        last_result = result
+        if result.success:
+            return result
+        if attempt >= retries or not _is_transient(result.error):
+            break
+        time.sleep(backoff_s * (2**attempt))
+
+    if last_result is None:
+        return GenerationResult(
+            provider=provider,
+            model="unknown",
+            text="",
+            success=False,
+            error="unknown_generation_failure",
+        )
+    return last_result

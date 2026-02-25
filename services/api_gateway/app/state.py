@@ -150,7 +150,12 @@ class RunStore:
         self._executor = RunExecutor(self)
 
     def _conn(self) -> psycopg.Connection:
-        return psycopg.connect(self.database_url, row_factory=dict_row)
+        connect_timeout_s = int(os.getenv("SPARKIT_DB_CONNECT_TIMEOUT_S", "3") or "3")
+        return psycopg.connect(
+            self.database_url,
+            row_factory=dict_row,
+            connect_timeout=max(1, connect_timeout_s),
+        )
 
     def _initialize(self) -> None:
         if self._initialized:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -127,6 +128,16 @@ class RetrievalExecutionResult:
     retrieval_brave_cost_usd: float
     brave_request_count: int
     budget_stop_reason: str | None
+
+
+@dataclass(frozen=True)
+class LiveWebFetchResult:
+    all_records: list[LiteratureRecord]
+    aggregate_errors: dict[str, str]
+    spent_usd: float
+    retrieval_base_cost_usd: float
+    retrieval_brave_cost_usd: float
+    brave_request_count: int
 
 
 @dataclass(frozen=True)
@@ -629,6 +640,132 @@ def _run_retrieval_rounds(
     )
 
 
+def _run_live_web_tool_loop(
+    *,
+    question: str,
+    records: list[LiteratureRecord],
+    planning_provider: str,
+    retrieval_provider: str,
+    max_results: int,
+    spent_usd: float,
+    retrieval_base_cost_usd: float,
+    retrieval_brave_cost_usd: float,
+    brave_request_count: int,
+    stages: list[TraceStage],
+    observability: RunObservability,
+) -> LiveWebFetchResult:
+    enabled = _env_bool("SPARKIT_ENABLE_LIVE_WEB_TOOL_LOOP", True)
+    if not enabled:
+        stages.append(
+            TraceStage(
+                name="retrieval_live_web_tool_loop",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={"enabled": False, "reason": "disabled_by_env"},
+            )
+        )
+        return LiveWebFetchResult(
+            all_records=records,
+            aggregate_errors={},
+            spent_usd=spent_usd,
+            retrieval_base_cost_usd=retrieval_base_cost_usd,
+            retrieval_brave_cost_usd=retrieval_brave_cost_usd,
+            brave_request_count=brave_request_count,
+        )
+
+    seed_records = _dedupe_records(records)[: _env_int("SPARKIT_LIVE_WEB_SEED_DOCS", 8, minimum=1)]
+    tool_queries = _build_claim_gap_queries(
+        question=question,
+        stage_name="live_web_tool_loop",
+        records=seed_records,
+        planning_provider=planning_provider,
+        max_items=_env_int("SPARKIT_LIVE_WEB_MAX_QUERIES", 2, minimum=1),
+    )
+    if not tool_queries:
+        stages.append(
+            TraceStage(
+                name="retrieval_live_web_tool_loop",
+                status=Status.COMPLETED,
+                model=planning_provider,
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={"enabled": True, "queries": [], "reason": "no_queries_generated"},
+            )
+        )
+        return LiveWebFetchResult(
+            all_records=records,
+            aggregate_errors={},
+            spent_usd=spent_usd,
+            retrieval_base_cost_usd=retrieval_base_cost_usd,
+            retrieval_brave_cost_usd=retrieval_brave_cost_usd,
+            brave_request_count=brave_request_count,
+        )
+
+    stage_start = datetime.now(timezone.utc)
+    fetched: list[LiteratureRecord] = []
+    aggregate_errors: dict[str, str] = {}
+    stage_brave_requests = 0
+    per_query_results: dict[str, int] = {}
+    for query in tool_queries:
+        found, errors, stats = search_literature(query, max_results=max_results, force_web=True)
+        deduped_found = _dedupe_records(found)
+        fetched.extend(deduped_found)
+        per_query_results[query] = len(deduped_found)
+        for source, err in errors.items():
+            aggregate_errors[f"live_web:{source}:{query}"] = err
+        stage_brave_requests += int((stats.get("requests_by_source") or {}).get("brave_web", 0))
+
+    merged_records = _dedupe_records([*records, *_dedupe_records(fetched)])
+    stage_base_cost = estimate_stage_cost("retrieval", units=len(tool_queries))
+    stage_brave_cost = estimate_brave_search_cost(stage_brave_requests)
+    stage_cost = stage_base_cost + stage_brave_cost
+    spent_usd += stage_cost
+    retrieval_base_cost_usd += stage_base_cost
+    retrieval_brave_cost_usd += stage_brave_cost
+    brave_request_count += stage_brave_requests
+
+    observability.add_stage(
+        StageMetric(
+            name="retrieval_live_web_tool_loop",
+            duration_ms=int((datetime.now(timezone.utc) - stage_start).total_seconds() * 1000),
+            documents_retrieved=len(fetched),
+            source_errors=len(aggregate_errors),
+            estimated_cost_usd=stage_cost,
+        )
+    )
+    stages.append(
+        TraceStage(
+            name="retrieval_live_web_tool_loop",
+            status=Status.COMPLETED,
+            model=retrieval_provider,
+            started_at=stage_start,
+            ended_at=datetime.now(timezone.utc),
+            artifacts={
+                "enabled": True,
+                "queries": tool_queries,
+                "query_result_counts": per_query_results,
+                "new_documents": len(_dedupe_records(fetched)),
+                "merged_documents": len(merged_records),
+                "source_errors": aggregate_errors,
+                "brave_requests": stage_brave_requests,
+                "brave_cost_usd": stage_brave_cost,
+                "estimated_cost_usd": stage_cost,
+            },
+        )
+    )
+
+    return LiveWebFetchResult(
+        all_records=merged_records,
+        aggregate_errors=aggregate_errors,
+        spent_usd=spent_usd,
+        retrieval_base_cost_usd=retrieval_base_cost_usd,
+        retrieval_brave_cost_usd=retrieval_brave_cost_usd,
+        brave_request_count=brave_request_count,
+    )
+
+
 def _assemble_evidence_and_build_claims(
     *,
     run_id: str,
@@ -716,23 +853,51 @@ def _run_verification_and_adjust_confidence(
     stages: list[TraceStage],
     observability: RunObservability,
 ) -> VerificationExecutionResult:
-    verification_result = _run_verification_and_adjust_confidence(
-        mode=mode,
-        max_cost_usd=max_cost_usd,
-        max_latency_s=max_latency_s,
-        effort=effort,
-        records_by_round=records_by_round,
-        base_claim_conf=base_claim_conf,
-        spent_usd=spent_usd,
-        provider_plan=provider_plan,
-        stages=stages,
-        observability=observability,
+    adversarial_stage_name = "retrieval_adversarial" if mode == Mode.RESEARCH_MAX.value else "retrieval_round_3_adversarial"
+    verifier_records = list(records_by_round.get(adversarial_stage_name, []))
+    verifier_records.extend(records_by_round.get("retrieval_round_4_falsification", []))
+    verifier_records = _dedupe_records(verifier_records)
+    verifier_start = datetime.now(timezone.utc)
+    depth = contradiction_depth_from_budget(max_cost_usd=max_cost_usd, max_latency_s=max_latency_s) + effort.contradiction_depth_bonus
+    verifier_result = run_verifier(
+        claim_ids=list(base_claim_conf.keys()),
+        adversarial_records=verifier_records,
+        depth=depth,
+        top_k=5,
     )
-    spent_usd = verification_result.spent_usd
-    verifier_cost = verification_result.verifier_cost
-    verifier_result = verification_result.verifier_result
+    verifier_cost = estimate_stage_cost("verification", units=max(1, depth))
+    spent_usd += verifier_cost
+    observability.add_stage(
+        StageMetric(
+            name="verification",
+            duration_ms=int((datetime.now(timezone.utc) - verifier_start).total_seconds() * 1000),
+            documents_retrieved=len(verifier_records),
+            source_errors=0,
+            estimated_cost_usd=verifier_cost,
+        )
+    )
+    stages.append(
+        TraceStage(
+            name="verification",
+            status=Status.COMPLETED,
+            model=provider_plan.verification,
+            started_at=verifier_start,
+            ended_at=datetime.now(timezone.utc),
+            artifacts={
+                "contradiction_flags": verifier_result.contradiction_flags,
+                "notes": verifier_result.notes,
+                "ranked_contradictions": verifier_result.ranked_contradictions,
+                "depth": depth,
+                "adversarial_stage_name": adversarial_stage_name,
+                "falsification_docs_used": len(records_by_round.get("retrieval_round_4_falsification", [])),
+            },
+        )
+    )
 
-    adjusted_claim_conf = verification_result.adjusted_claim_conf
+    adjusted_claim_conf: dict[str, float] = {}
+    for claim_id, base in base_claim_conf.items():
+        penalty = verifier_result.penalties.get(claim_id, 0.0)
+        adjusted_claim_conf[claim_id] = max(0.05, min(0.95, base - penalty))
 
     return VerificationExecutionResult(
         spent_usd=spent_usd,
@@ -794,6 +959,7 @@ def _run_synthesis_phase(
     synthesis_token_budget: int | None,
     research_plan: ResearchPlan | None,
     stages: list[TraceStage],
+    difficulty_profile: str = "easy",
 ) -> SynthesisExecutionResult:
     synthesis_failures: list[str] = []
     draft_texts: list[str] = []
@@ -804,6 +970,7 @@ def _run_synthesis_phase(
         provider: str,
         model: str,
         draft: str,
+        prompt_text: str | None = None,
         tokens_input: int = 0,
         tokens_input_cached: int = 0,
         tokens_output: int = 0,
@@ -814,7 +981,7 @@ def _run_synthesis_phase(
             usage_rows=draft_usage,
             provider=provider,
             model=model,
-            prompt_text=synthesis_prompt,
+            prompt_text=prompt_text or synthesis_prompt,
             draft_text=draft,
             tokens_input=tokens_input,
             tokens_input_cached=tokens_input_cached,
@@ -829,16 +996,136 @@ def _run_synthesis_phase(
         reserve_next_stage_usd=estimate_stage_cost("synthesis"),
     ):
         synthesis_failures.append("budget guard: synthesis skipped")
-        draft_texts.append(
-            _build_answer_text(
-                question,
-                claim_texts,
-                unsupported_claims,
-                clusters=claim_clusters,
+        if _question_has_answer_choices(question) and answer_choices:
+            lexical_scores = _mcq_lexical_option_scores(
+                answer_choices=answer_choices,
+                claim_texts=claim_texts,
                 section_summaries=section_summaries,
             )
-        )
+            selected_letter = (
+                max(
+                    lexical_scores.items(),
+                    key=lambda item: float(item[1].get("lexical", 0.0)),
+                )[0]
+                if lexical_scores
+                else sorted(answer_choices.keys())[0]
+            )
+            draft = f"<answer>{selected_letter}</answer>"
+            draft_texts.append(draft)
+            _record_gen_usage(provider_plan.synthesis, provider_plan.synthesis, draft)
+            stages.append(
+                TraceStage(
+                    name="mcq_budget_fallback",
+                    status=Status.COMPLETED,
+                    model="policy",
+                    started_at=datetime.now(timezone.utc),
+                    ended_at=datetime.now(timezone.utc),
+                    artifacts={
+                        "selected_option": selected_letter,
+                        "reason": "synthesis_budget_guard",
+                    },
+                )
+            )
+        else:
+            draft_texts.append(
+                _build_answer_text(
+                    question,
+                    claim_texts,
+                    unsupported_claims,
+                    clusters=claim_clusters,
+                    section_summaries=section_summaries,
+                )
+            )
     elif mode in {Mode.SINGLE.value, Mode.ROUTED.value}:
+        hard_parallel_enabled = _env_bool("SPARKIT_ENABLE_HARD_PARALLEL_CANDIDATES", True)
+        if difficulty_profile == "hard" and hard_parallel_enabled and not (_question_has_answer_choices(question) and answer_choices):
+            variant_count = _env_int("SPARKIT_HARD_PARALLEL_CANDIDATES", 3, minimum=2)
+            variant_count = min(4, variant_count)
+            prompt_variants = [
+                synthesis_prompt,
+                (
+                    "Focus on falsification, alternative explanations, and uncertainty.\n"
+                    f"{synthesis_prompt}"
+                ),
+                (
+                    "Prioritize methods/results grounding. Penalize weak claims and overreach.\n"
+                    f"{synthesis_prompt}"
+                ),
+                (
+                    "Produce a conservative, evidence-first answer with explicit caveats.\n"
+                    f"{synthesis_prompt}"
+                ),
+            ][:variant_count]
+            generated: list[tuple[str, object]] = []
+            start_parallel = datetime.now(timezone.utc)
+            with ThreadPoolExecutor(max_workers=len(prompt_variants)) as executor:
+                future_map = {
+                    executor.submit(generate_text, provider_plan.synthesis, prompt_variant, synthesis_token_budget): prompt_variant
+                    for prompt_variant in prompt_variants
+                }
+                for future in as_completed(future_map):
+                    prompt_variant = future_map[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        synthesis_failures.append(f"{provider_plan.synthesis}: parallel_candidate_exception ({exc})")
+                        continue
+                    generated.append((prompt_variant, result))
+
+            candidate_drafts: list[str] = []
+            for prompt_variant, result in generated:
+                if result.success and result.text.strip():
+                    draft = result.text.strip()
+                    candidate_drafts.append(draft)
+                    _record_gen_usage(
+                        provider_plan.synthesis,
+                        result.model,
+                        draft,
+                        prompt_text=prompt_variant,
+                        tokens_input=result.tokens_input,
+                        tokens_input_cached=result.tokens_input_cached,
+                        tokens_output=result.tokens_output,
+                    )
+                else:
+                    synthesis_failures.append(f"{provider_plan.synthesis}: {result.error or 'empty output'}")
+
+            if candidate_drafts:
+                draft_texts = [_select_best_parallel_draft(question, candidate_drafts)]
+                ensemble_agreement = _ensemble_agreement(candidate_drafts)
+            else:
+                fallback = _build_answer_text(
+                    question,
+                    claim_texts,
+                    unsupported_claims,
+                    clusters=claim_clusters,
+                    section_summaries=section_summaries,
+                )
+                draft_texts = [fallback]
+                _record_gen_usage(provider_plan.synthesis, provider_plan.synthesis, fallback)
+
+            stages.append(
+                TraceStage(
+                    name="parallel_candidate_generation",
+                    status=Status.COMPLETED,
+                    model=provider_plan.synthesis,
+                    started_at=start_parallel,
+                    ended_at=datetime.now(timezone.utc),
+                    artifacts={
+                        "difficulty_profile": difficulty_profile,
+                        "candidates_requested": len(prompt_variants),
+                        "candidates_completed": len(generated),
+                        "candidate_drafts": len(candidate_drafts),
+                        "agreement": ensemble_agreement,
+                    },
+                )
+            )
+            return SynthesisExecutionResult(
+                spent_usd=spent_usd,
+                synthesis_failures=synthesis_failures,
+                draft_texts=draft_texts,
+                draft_usage=draft_usage,
+                ensemble_agreement=ensemble_agreement,
+            )
         if _question_has_answer_choices(question) and answer_choices:
             option_evidence_packs = _build_option_evidence_packs(
                 stem=stem_question,
@@ -1027,6 +1314,38 @@ def _run_synthesis_phase(
                             tokens_input_cached=synth_result.tokens_input_cached,
                             tokens_output=synth_result.tokens_output,
                         )
+            # Guarantee a parseable MCQ output even when provider calls degrade.
+            candidate = draft_texts[0] if draft_texts else ""
+            if not _extract_answer_letter(candidate):
+                lexical_scores = _mcq_lexical_option_scores(
+                    answer_choices=answer_choices,
+                    claim_texts=claim_texts,
+                    section_summaries=section_summaries,
+                )
+                selected_letter = (
+                    max(
+                        lexical_scores.items(),
+                        key=lambda item: float(item[1].get("lexical", 0.0)),
+                    )[0]
+                    if lexical_scores
+                    else sorted(answer_choices.keys())[0]
+                )
+                draft = f"<answer>{selected_letter}</answer>"
+                draft_texts = [draft]
+                _record_gen_usage(provider_plan.synthesis, provider_plan.synthesis, draft)
+                stages.append(
+                    TraceStage(
+                        name="mcq_format_fallback",
+                        status=Status.COMPLETED,
+                        model="policy",
+                        started_at=datetime.now(timezone.utc),
+                        ended_at=datetime.now(timezone.utc),
+                        artifacts={
+                            "selected_option": selected_letter,
+                            "reason": "missing_or_unparseable_mcq_answer",
+                        },
+                    )
+                )
         else:
             synth_result = generate_text(provider_plan.synthesis, synthesis_prompt, max_tokens=synthesis_token_budget)
             if synth_result.success and synth_result.text.strip():
@@ -1618,6 +1937,93 @@ def _abstain_reasons(
     return reasons
 
 
+def _difficulty_signals(
+    *,
+    min_sources: int,
+    selected_records_count: int,
+    unsupported_claims: int,
+    total_claims: int,
+    contradiction_flags: int,
+    retrieval_error_count: int,
+) -> tuple[float, dict[str, float], str]:
+    retrieval_sparsity = 1.0 - min(1.0, selected_records_count / max(1, min_sources))
+    unsupported_ratio = min(1.0, unsupported_claims / max(1, total_claims))
+    contradiction_ratio = min(1.0, contradiction_flags / 6.0)
+    retrieval_error_ratio = 1.0 if retrieval_error_count > 0 else 0.0
+    score = (
+        0.35 * retrieval_sparsity
+        + 0.25 * unsupported_ratio
+        + 0.25 * contradiction_ratio
+        + 0.15 * retrieval_error_ratio
+    )
+    threshold = _env_float("SPARKIT_DIFFICULTY_HARD_THRESHOLD", 0.45, minimum=0.0)
+    profile = "hard" if score >= threshold else "easy"
+    signals = {
+        "retrieval_sparsity": retrieval_sparsity,
+        "unsupported_ratio": unsupported_ratio,
+        "contradiction_ratio": contradiction_ratio,
+        "retrieval_error_ratio": retrieval_error_ratio,
+        "hard_threshold": threshold,
+    }
+    return score, signals, profile
+
+
+def _estimate_answer_confidence(
+    *,
+    provider_statuses: list[ProviderStatus],
+    citations_count: int,
+    base_claim_conf_count: int,
+    unsupported_claims: int,
+    contradiction_flags: int,
+    ensemble_agreement: float,
+    evidence_count: int,
+    adjusted_claim_conf: dict[str, float],
+) -> float:
+    configured_count = sum(1 for status in provider_statuses if status.configured)
+    features = CalibrationFeatures(
+        support_coverage=citations_count / max(1, base_claim_conf_count),
+        unsupported_claims=unsupported_claims,
+        contradiction_flags=contradiction_flags,
+        provider_config_ratio=configured_count / max(1, len(provider_statuses)),
+        ensemble_agreement=ensemble_agreement,
+        evidence_count=evidence_count,
+    )
+    answer_conf, _ = calibrate_answer(features, adjusted_claim_conf)
+    return answer_conf
+
+
+def _should_trigger_confidence_retry(
+    *,
+    question: str,
+    draft_texts: list[str],
+    synthesis_failures: list[str],
+    provisional_confidence: float,
+) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    min_conf = _env_float("SPARKIT_CONFIDENCE_RETRY_MIN_CONFIDENCE", 0.55, minimum=0.0)
+    if provisional_confidence < min_conf:
+        reasons.append(f"low_confidence<{min_conf:.2f}")
+    if synthesis_failures:
+        reasons.append("synthesis_failures_present")
+    if _question_has_answer_choices(question):
+        candidate = draft_texts[0] if draft_texts else ""
+        if not _extract_answer_letter(candidate):
+            reasons.append("mcq_answer_letter_missing")
+    return (len(reasons) > 0), reasons
+
+
+def _select_best_parallel_draft(question: str, drafts: list[str]) -> str:
+    if not drafts:
+        return ""
+    anchors = _extract_lexical_anchors(question, max_items=10)
+    ranked = sorted(
+        drafts,
+        key=lambda text: (_anchor_coverage(text, anchors), len(text)),
+        reverse=True,
+    )
+    return ranked[0]
+
+
 def _build_round_queries(question: str) -> list[tuple[str, list[str]]]:
     return [
         ("retrieval_round_1", [question, f"{question} review"]),
@@ -1695,10 +2101,17 @@ def _extract_answer_letter(text: str) -> str | None:
     match = re.search(r"<answer>\s*([A-N])\s*</answer>", text, flags=re.IGNORECASE)
     if match:
         return match.group(1).upper()
-    # fallback for model responses that ignore tag requirement
-    loose = re.search(r"\b([A-N])\b", text, flags=re.IGNORECASE)
-    if loose:
-        return loose.group(1).upper()
+    # Accept a few explicit non-XML formats, but avoid matching incidental letters in prose.
+    explicit = re.search(
+        r"(?:^|\n|\b)(?:final\s+answer|answer|selected|choice|option)\s*[:\-]?\s*([A-N])\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if explicit:
+        return explicit.group(1).upper()
+    single_line = re.match(r"^\s*([A-N])\s*$", text.strip(), flags=re.IGNORECASE)
+    if single_line:
+        return single_line.group(1).upper()
     return None
 
 
@@ -2247,6 +2660,7 @@ def _heuristic_retrieval_plan(question: str, research_plan: ResearchPlan | None 
         ),
         "reference": _dedupe_queries([f"{lead} systematic review", f"{lead} meta-analysis"], max_items=6),
         "options": option_queries,
+        "factcheck": _dedupe_queries([f"{lead} canonical mechanism", f"{lead} textbook explanation"], max_items=4),
     }
     for segment in segments[1:3]:
         intent_queries["primary"] = _dedupe_queries([*intent_queries["primary"], f"{segment} evidence"], max_items=8)
@@ -2269,7 +2683,17 @@ def _heuristic_retrieval_plan(question: str, research_plan: ResearchPlan | None 
                 [*intent_queries["adversarial"], f"{entity} contradictory mechanism", f"{entity} failed replication"],
                 max_items=8,
             )
+            intent_queries["factcheck"] = _dedupe_queries(
+                [*intent_queries["factcheck"], f"{entity} standard mechanism", f"{entity} established pathway"],
+                max_items=6,
+            )
     focus_terms = _dedupe_queries([*anchors, *segments, *answer_choices.values()], max_items=14)
+    intent_queries = _enforce_intent_query_quotas(
+        stem=stem,
+        answer_choices=answer_choices,
+        segments=segments,
+        intent_queries=intent_queries,
+    )
     return RetrievalPlan(
         segments=segments,
         focus_terms=focus_terms,
@@ -2322,6 +2746,79 @@ def _decompose_question(question: str, planning_provider: str) -> ResearchPlan:
     )
 
 
+def _enforce_intent_query_quotas(
+    *,
+    stem: str,
+    answer_choices: dict[str, str],
+    segments: list[str],
+    intent_queries: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    lead = segments[0] if segments else stem
+    max_primary = _env_int("SPARKIT_INTENT_PRIMARY_MAX", 10, minimum=4)
+    max_methods = _env_int("SPARKIT_INTENT_METHODS_MAX", 8, minimum=2)
+    max_reference = _env_int("SPARKIT_INTENT_REFERENCE_MAX", 6, minimum=2)
+    max_adversarial = _env_int("SPARKIT_INTENT_ADVERSARIAL_MAX", 8, minimum=2)
+    max_factcheck = _env_int("SPARKIT_INTENT_FACTCHECK_MAX", 6, minimum=2)
+    max_options = _env_int("SPARKIT_INTENT_OPTIONS_MAX", 8, minimum=2)
+
+    min_primary = _env_int("SPARKIT_INTENT_PRIMARY_MIN", 3, minimum=1)
+    min_methods = _env_int("SPARKIT_INTENT_METHODS_MIN", 2, minimum=1)
+    min_reference = _env_int("SPARKIT_INTENT_REFERENCE_MIN", 2, minimum=1)
+    min_adversarial = _env_int("SPARKIT_INTENT_ADVERSARIAL_MIN", 2, minimum=1)
+    min_factcheck = _env_int("SPARKIT_INTENT_FACTCHECK_MIN", 2, minimum=1)
+    min_options = _env_int("SPARKIT_INTENT_OPTIONS_MIN", 2, minimum=1) if answer_choices else 0
+
+    primary = _dedupe_queries(intent_queries.get("primary", []), max_items=max_primary)
+    methods = _dedupe_queries(intent_queries.get("methods", []), max_items=max_methods)
+    reference = _dedupe_queries(intent_queries.get("reference", []), max_items=max_reference)
+    adversarial = _dedupe_queries(intent_queries.get("adversarial", []), max_items=max_adversarial)
+    factcheck = _dedupe_queries(intent_queries.get("factcheck", []), max_items=max_factcheck)
+    options = _dedupe_queries(intent_queries.get("options", []), max_items=max_options)
+
+    if len(primary) < min_primary:
+        primary = _dedupe_queries(
+            [*primary, f"{lead} primary evidence", f"{lead} consensus evidence", f"{lead} key findings"],
+            max_items=max_primary,
+        )
+    if len(methods) < min_methods:
+        methods = _dedupe_queries(
+            [*methods, f"{lead} methods", f"{lead} protocol details", f"{lead} experimental design"],
+            max_items=max_methods,
+        )
+    if len(reference) < min_reference:
+        reference = _dedupe_queries(
+            [*reference, f"{lead} systematic review", f"{lead} meta-analysis", f"{lead} review article"],
+            max_items=max_reference,
+        )
+    if len(adversarial) < min_adversarial:
+        adversarial = _dedupe_queries(
+            [*adversarial, f"{lead} contradictory findings", f"{lead} failed replication", f"{lead} negative results"],
+            max_items=max_adversarial,
+        )
+    if len(factcheck) < min_factcheck:
+        factcheck = _dedupe_queries(
+            [*factcheck, f"{lead} canonical mechanism", f"{lead} established pathway", f"{lead} textbook explanation"],
+            max_items=max_factcheck,
+        )
+    if answer_choices and len(options) < min_options:
+        options = _dedupe_queries(
+            [*options, *_build_option_hypothesis_queries(stem, answer_choices, max_items=max_options)],
+            max_items=max_options,
+        )
+
+    if options:
+        primary = _dedupe_queries([*primary, *options], max_items=max_primary)
+
+    return {
+        "primary": primary,
+        "options": options,
+        "methods": methods,
+        "adversarial": adversarial,
+        "reference": reference,
+        "factcheck": factcheck,
+    }
+
+
 def _decompose_retrieval(question: str, planning_provider: str, research_plan: ResearchPlan | None = None) -> RetrievalPlan:
     stem, answer_choices = _split_question_and_choices(question)
     choices_line = " | ".join(f"{label}: {text}" for label, text in answer_choices.items())
@@ -2335,6 +2832,7 @@ def _decompose_retrieval(question: str, planning_provider: str, research_plan: R
         "queries_methods: query1 | query2 | query3\n"
         "queries_adversarial: query1 | query2\n"
         "queries_reference: query1 | query2\n\n"
+        "queries_factcheck: query1 | query2\n\n"
         "Rules: queries must be specific, technical, and suitable for scholarly search APIs.\n"
         "Keep each query concise (<= 16 terms), avoid copying the full question verbatim.\n"
         "If answer choices are present, use them as discriminative retrieval cues in queries_options.\n"
@@ -2354,6 +2852,7 @@ def _decompose_retrieval(question: str, planning_provider: str, research_plan: R
         "methods": [],
         "adversarial": [],
         "reference": [],
+        "factcheck": [],
     }
     key_map = {
         "queries_primary": "primary",
@@ -2361,6 +2860,7 @@ def _decompose_retrieval(question: str, planning_provider: str, research_plan: R
         "queries_methods": "methods",
         "queries_adversarial": "adversarial",
         "queries_reference": "reference",
+        "queries_factcheck": "factcheck",
     }
     for raw_line in result.text.splitlines():
         line = raw_line.strip()
@@ -2378,7 +2878,7 @@ def _decompose_retrieval(question: str, planning_provider: str, research_plan: R
 
     fallback = _heuristic_retrieval_plan(question, research_plan)
     merged_intents: dict[str, list[str]] = {}
-    for intent in ("primary", "options", "methods", "adversarial", "reference"):
+    for intent in ("primary", "options", "methods", "adversarial", "reference", "factcheck"):
         merged_intents[intent] = intent_queries.get(intent) or fallback.intent_queries[intent]
     if merged_intents.get("options"):
         merged_intents["primary"] = _dedupe_queries(
@@ -2392,6 +2892,12 @@ def _decompose_retrieval(question: str, planning_provider: str, research_plan: R
             max_items=10,
         )
 
+    merged_intents = _enforce_intent_query_quotas(
+        stem=stem,
+        answer_choices=answer_choices,
+        segments=segments or fallback.segments,
+        intent_queries=merged_intents,
+    )
     merged_focus_terms = _dedupe_queries([*focus_terms, *fallback.focus_terms, *answer_choices.values()], max_items=14)
     return RetrievalPlan(
         segments=(segments or fallback.segments),
@@ -2407,6 +2913,7 @@ def _build_round_queries_from_plan(mode: str, question: str, plan: RetrievalPlan
         return [
             ("retrieval_primary", primary_queries),
             ("retrieval_option_hypotheses", plan.intent_queries.get("options", [])),
+            ("retrieval_factcheck", plan.intent_queries.get("factcheck", [])),
             ("retrieval_methods", plan.intent_queries["methods"]),
             ("retrieval_adversarial", plan.intent_queries["adversarial"]),
             ("retrieval_reference", plan.intent_queries["reference"]),
@@ -2415,6 +2922,7 @@ def _build_round_queries_from_plan(mode: str, question: str, plan: RetrievalPlan
     rounds = [
         ("retrieval_round_1", primary_queries),
         ("retrieval_round_option_hypotheses", option_queries),
+        ("retrieval_round_factcheck", plan.intent_queries.get("factcheck", [])),
         ("retrieval_round_2_gap_fill", _dedupe_queries([*plan.intent_queries["methods"], *plan.intent_queries["reference"]], max_items=8)),
         ("retrieval_round_3_adversarial", plan.intent_queries["adversarial"]),
     ]
@@ -2879,7 +3387,13 @@ def execute_orchestration(
     provider_list = config.providers
     provider_statuses = build_default_registry().resolve(provider_list)
     missing_keys = [status for status in provider_statuses if not status.configured]
-    provider_plan = build_provider_plan(mode=config.mode, statuses=provider_statuses, requested=provider_list)
+    task_type = _infer_task_type(question)
+    provider_plan = build_provider_plan(
+        mode=config.mode,
+        statuses=provider_statuses,
+        requested=provider_list,
+        task_type=task_type,
+    )
     effort = _effort_profile(mode=config.mode, question=question, min_sources=config.min_sources)
     synthesis_token_budget = (
         config.synthesis_max_tokens if config.synthesis_max_tokens is not None else effort.synthesis_max_tokens
@@ -2926,8 +3440,26 @@ def execute_orchestration(
     retrieval_brave_cost_usd = retrieval_result.retrieval_brave_cost_usd
     brave_request_count = retrieval_result.brave_request_count
     budget_stop_reason = retrieval_result.budget_stop_reason
+    live_web_result = _run_live_web_tool_loop(
+        question=question,
+        records=retrieval_result.all_records,
+        planning_provider=provider_plan.planning,
+        retrieval_provider=provider_plan.retrieval,
+        max_results=max(4, effort.retrieval_min_results // 2),
+        spent_usd=spent_usd,
+        retrieval_base_cost_usd=retrieval_base_cost_usd,
+        retrieval_brave_cost_usd=retrieval_brave_cost_usd,
+        brave_request_count=brave_request_count,
+        stages=stages,
+        observability=observability,
+    )
+    spent_usd = live_web_result.spent_usd
+    retrieval_base_cost_usd = live_web_result.retrieval_base_cost_usd
+    retrieval_brave_cost_usd = live_web_result.retrieval_brave_cost_usd
+    brave_request_count = live_web_result.brave_request_count
+    aggregate_errors.update(live_web_result.aggregate_errors)
 
-    records = _dedupe_records(retrieval_result.all_records)
+    records = _dedupe_records(live_web_result.all_records)
     selected_records = _select_records_for_ingestion(
         question=question,
         records=records,
@@ -3038,6 +3570,38 @@ def execute_orchestration(
 
     claim_clusters = _build_claim_clusters(claim_evidence)
     section_summaries = _build_section_summaries(claim_evidence)
+    difficulty_score, difficulty_breakdown, difficulty_profile = _difficulty_signals(
+        min_sources=min_sources,
+        selected_records_count=len(selected_records),
+        unsupported_claims=unsupported_claims,
+        total_claims=len(base_claim_conf),
+        contradiction_flags=verifier_result.contradiction_flags,
+        retrieval_error_count=len(aggregate_errors),
+    )
+    synthesis_mode = mode
+    if (
+        mode == Mode.ROUTED.value
+        and difficulty_profile == "hard"
+        and _env_bool("SPARKIT_DIFFICULTY_ESCALATE_ROUTED_TO_ENSEMBLE", False)
+    ):
+        synthesis_mode = Mode.ENSEMBLE.value
+    stages.append(
+        TraceStage(
+            name="difficulty_gate",
+            status=Status.COMPLETED,
+            model="policy",
+            started_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(timezone.utc),
+            artifacts={
+                "difficulty_score": round(difficulty_score, 4),
+                "difficulty_profile": difficulty_profile,
+                "signals": difficulty_breakdown,
+                "input_mode": mode,
+                "synthesis_mode": synthesis_mode,
+                "escalation_enabled": _env_bool("SPARKIT_DIFFICULTY_ESCALATE_ROUTED_TO_ENSEMBLE", False),
+            },
+        )
+    )
     synthesis_prompt = _build_synthesis_prompt(
         question,
         claim_texts,
@@ -3048,7 +3612,7 @@ def execute_orchestration(
     synthesis_start = datetime.now(timezone.utc)
     synthesis_result = _run_synthesis_phase(
         started=started,
-        mode=mode,
+        mode=synthesis_mode,
         max_latency_s=max_latency_s,
         max_cost_usd=max_cost_usd,
         spent_usd=spent_usd,
@@ -3064,6 +3628,7 @@ def execute_orchestration(
         synthesis_token_budget=synthesis_token_budget,
         research_plan=research_plan,
         stages=stages,
+        difficulty_profile=difficulty_profile,
     )
     spent_usd = synthesis_result.spent_usd
     synthesis_failures = synthesis_result.synthesis_failures
@@ -3111,10 +3676,207 @@ def execute_orchestration(
         spent_usd = revision_result.spent_usd
         draft_texts = revision_result.draft_texts
 
+    confidence_retry_enabled = _env_bool("SPARKIT_ENABLE_CONFIDENCE_RETRY", True)
+    confidence_retry_max_attempts = _env_int("SPARKIT_CONFIDENCE_RETRY_MAX_ATTEMPTS", 1, minimum=0)
+    retry_attempt = 0
+    while confidence_retry_enabled and retry_attempt < confidence_retry_max_attempts:
+        provisional_conf = _estimate_answer_confidence(
+            provider_statuses=provider_statuses,
+            citations_count=len(citations),
+            base_claim_conf_count=len(base_claim_conf),
+            unsupported_claims=unsupported_claims,
+            contradiction_flags=verifier_result.contradiction_flags,
+            ensemble_agreement=ensemble_agreement,
+            evidence_count=len(selected_records),
+            adjusted_claim_conf=adjusted_claim_conf,
+        )
+        should_retry, retry_reasons = _should_trigger_confidence_retry(
+            question=question,
+            draft_texts=draft_texts,
+            synthesis_failures=synthesis_failures,
+            provisional_confidence=provisional_conf,
+        )
+        stages.append(
+            TraceStage(
+                name="confidence_retry_gate",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "attempt": retry_attempt + 1,
+                    "enabled": confidence_retry_enabled,
+                    "triggered": should_retry,
+                    "reasons": retry_reasons,
+                    "provisional_confidence": round(provisional_conf, 4),
+                },
+            )
+        )
+        if not should_retry:
+            break
+
+        retry_queries = _build_claim_gap_queries(
+            question=question,
+            stage_name="confidence_retry",
+            records=selected_records,
+            planning_provider=provider_plan.planning,
+            max_items=_env_int("SPARKIT_CONFIDENCE_RETRY_MAX_QUERIES", 4, minimum=1),
+        )
+        if not retry_queries:
+            break
+
+        retry_stage_start = datetime.now(timezone.utc)
+        retry_records: list[LiteratureRecord] = []
+        retry_errors: dict[str, str] = {}
+        retry_brave_requests = 0
+        for query in retry_queries:
+            found, errors, stats = search_literature(query, max_results=effort.retrieval_min_results)
+            retry_records.extend(found)
+            for source, err in errors.items():
+                retry_errors[f"{source}:{query}"] = err
+            retry_brave_requests += int((stats.get("requests_by_source") or {}).get("brave_web", 0))
+        deduped_retry_records = _dedupe_records(retry_records)
+        aggregate_errors.update(retry_errors)
+        records = _dedupe_records([*records, *deduped_retry_records])
+        selected_records = _select_records_for_ingestion(
+            question=question,
+            records=records,
+            target_docs=effort.ingestion_target_docs,
+            boost_terms=retrieval_plan.focus_terms if retrieval_plan else None,
+        )
+        if final_semantic_rerank:
+            selected_records = _semantic_rerank_records(
+                question=question,
+                records=selected_records,
+                provider=provider_plan.retrieval,
+                top_k=effort.ingestion_target_docs,
+            )
+
+        retry_base_cost = estimate_stage_cost("retrieval", units=len(retry_queries))
+        retry_brave_cost = estimate_brave_search_cost(retry_brave_requests)
+        retry_cost = retry_base_cost + retry_brave_cost
+        spent_usd += retry_cost
+        retrieval_base_cost_usd += retry_base_cost
+        retrieval_brave_cost_usd += retry_brave_cost
+        brave_request_count += retry_brave_requests
+        observability.add_stage(
+            StageMetric(
+                name="retrieval_confidence_retry",
+                duration_ms=int((datetime.now(timezone.utc) - retry_stage_start).total_seconds() * 1000),
+                documents_retrieved=len(deduped_retry_records),
+                source_errors=len(retry_errors),
+                estimated_cost_usd=retry_cost,
+            )
+        )
+        stages.append(
+            TraceStage(
+                name="retrieval_confidence_retry",
+                status=Status.COMPLETED,
+                model=provider_plan.retrieval,
+                started_at=retry_stage_start,
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "attempt": retry_attempt + 1,
+                    "queries": retry_queries,
+                    "documents_retrieved": len(deduped_retry_records),
+                    "source_errors": retry_errors,
+                    "brave_requests": retry_brave_requests,
+                    "estimated_cost_usd": retry_cost,
+                },
+            )
+        )
+
+        evidence_result = _assemble_evidence_and_build_claims(
+            run_id=run_id,
+            question=question,
+            selected_records=selected_records,
+            retrieval_plan=retrieval_plan,
+            ingestion_max_chars=ingestion_max_chars,
+            spent_usd=spent_usd,
+        )
+        spent_usd = evidence_result.spent_usd
+        citations = evidence_result.citations
+        claim_texts = evidence_result.claim_texts
+        claim_evidence = evidence_result.claim_evidence
+        base_claim_conf = evidence_result.base_claim_conf
+        unsupported_claims = evidence_result.unsupported_claims
+        claim_clusters = _build_claim_clusters(claim_evidence)
+        section_summaries = _build_section_summaries(claim_evidence)
+
+        adversarial_stage = "retrieval_adversarial" if mode == Mode.RESEARCH_MAX.value else "retrieval_round_3_adversarial"
+        retry_records_by_round = dict(records_by_round)
+        retry_records_by_round[adversarial_stage] = _dedupe_records(
+            [*(retry_records_by_round.get(adversarial_stage, [])), *deduped_retry_records]
+        )
+        verification_result = _run_verification_and_adjust_confidence(
+            mode=mode,
+            max_cost_usd=max_cost_usd,
+            max_latency_s=max_latency_s,
+            effort=effort,
+            records_by_round=retry_records_by_round,
+            base_claim_conf=base_claim_conf,
+            spent_usd=spent_usd,
+            provider_plan=provider_plan,
+            stages=stages,
+            observability=observability,
+        )
+        spent_usd = verification_result.spent_usd
+        verifier_cost += verification_result.verifier_cost
+        verifier_result = verification_result.verifier_result
+        adjusted_claim_conf = verification_result.adjusted_claim_conf
+        records_by_round = retry_records_by_round
+
+        synthesis_prompt = _build_synthesis_prompt(
+            question,
+            claim_texts,
+            claim_clusters=claim_clusters,
+            section_summaries=section_summaries,
+        )
+        retry_synth = _run_synthesis_phase(
+            started=started,
+            mode=synthesis_mode,
+            max_latency_s=max_latency_s,
+            max_cost_usd=max_cost_usd,
+            spent_usd=spent_usd,
+            provider_plan=provider_plan,
+            question=question,
+            stem_question=stem_question,
+            answer_choices=answer_choices,
+            claim_texts=claim_texts,
+            unsupported_claims=unsupported_claims,
+            claim_clusters=claim_clusters,
+            section_summaries=section_summaries,
+            synthesis_prompt=synthesis_prompt,
+            synthesis_token_budget=synthesis_token_budget,
+            research_plan=research_plan,
+            stages=stages,
+            difficulty_profile=difficulty_profile,
+        )
+        spent_usd = retry_synth.spent_usd
+        draft_usage.extend(retry_synth.draft_usage)
+        draft_texts = retry_synth.draft_texts
+        synthesis_failures = retry_synth.synthesis_failures
+        ensemble_agreement = retry_synth.ensemble_agreement
+        if effort.synthesis_revision_pass and draft_texts:
+            retry_revision = _run_synthesis_revision_pass(
+                question=question,
+                provider_plan=provider_plan,
+                synthesis_token_budget=synthesis_token_budget,
+                synthesis_prompt=synthesis_prompt,
+                draft_texts=draft_texts,
+                draft_usage=draft_usage,
+                spent_usd=spent_usd,
+                stages=stages,
+            )
+            spent_usd = retry_revision.spent_usd
+            draft_texts = retry_revision.draft_texts
+
+        retry_attempt += 1
+
     execution_context = ExecutionContext(
         run_id=run_id,
         question=question,
-        mode=mode,
+        mode=synthesis_mode,
         min_sources=min_sources,
         max_latency_s=max_latency_s,
         max_cost_usd=max_cost_usd,

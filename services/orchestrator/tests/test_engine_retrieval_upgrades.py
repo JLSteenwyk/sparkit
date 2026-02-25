@@ -9,6 +9,10 @@ from services.orchestrator.app.engine import (
     _candidate_option_labels_for_falsification,
     _build_falsification_queries,
     _build_round_queries_from_plan,
+    _enforce_intent_query_quotas,
+    _difficulty_signals,
+    _select_best_parallel_draft,
+    _should_trigger_confidence_retry,
     _should_inject_claim_gap,
     _semantic_rerank_enabled_for_stage,
 )
@@ -49,6 +53,7 @@ def test_round_plan_includes_falsification_when_enabled(monkeypatch) -> None:
             "methods": ["q methods"],
             "adversarial": ["q adversarial"],
             "reference": ["q ref"],
+            "factcheck": ["q factcheck"],
         },
         answer_choices={"A": "option a", "B": "option b"},
     )
@@ -188,3 +193,88 @@ def test_should_inject_claim_gap_allows_when_low_evidence_and_headroom() -> None
     )
     assert allowed is True
     assert reason == "inject"
+
+
+def test_difficulty_signals_marks_hard_when_evidence_is_sparse_and_contradictory() -> None:
+    score, signals, profile = _difficulty_signals(
+        min_sources=8,
+        selected_records_count=2,
+        unsupported_claims=3,
+        total_claims=4,
+        contradiction_flags=4,
+        retrieval_error_count=1,
+    )
+    assert profile == "hard"
+    assert score > 0.45
+    assert signals["retrieval_error_ratio"] == 1.0
+
+
+def test_difficulty_signals_marks_easy_with_strong_evidence() -> None:
+    score, _signals, profile = _difficulty_signals(
+        min_sources=5,
+        selected_records_count=8,
+        unsupported_claims=0,
+        total_claims=8,
+        contradiction_flags=0,
+        retrieval_error_count=0,
+    )
+    assert profile == "easy"
+    assert score < 0.2
+
+
+def test_confidence_retry_triggers_for_low_confidence() -> None:
+    should_retry, reasons = _should_trigger_confidence_retry(
+        question="What is the best answer?",
+        draft_texts=["A detailed answer"],
+        synthesis_failures=[],
+        provisional_confidence=0.2,
+    )
+    assert should_retry is True
+    assert any("low_confidence" in reason for reason in reasons)
+
+
+def test_confidence_retry_triggers_for_mcq_missing_letter() -> None:
+    should_retry, reasons = _should_trigger_confidence_retry(
+        question="Question stem\nAnswer choices:\nA. one\nB. two",
+        draft_texts=["No xml answer tag present"],
+        synthesis_failures=[],
+        provisional_confidence=0.9,
+    )
+    assert should_retry is True
+    assert "mcq_answer_letter_missing" in reasons
+
+
+def test_confidence_retry_skips_for_high_confidence_clean_output() -> None:
+    should_retry, reasons = _should_trigger_confidence_retry(
+        question="Question stem\nAnswer choices:\nA. one\nB. two",
+        draft_texts=["<answer>B</answer>"],
+        synthesis_failures=[],
+        provisional_confidence=0.95,
+    )
+    assert should_retry is False
+    assert reasons == []
+
+
+def test_select_best_parallel_draft_prefers_anchor_coverage() -> None:
+    best = _select_best_parallel_draft(
+        "Describe MAPK phosphorylation cascade in detail",
+        [
+            "A broad answer with little specificity.",
+            "MAPK phosphorylation cascade proceeds via RAF-MEK-ERK with caveats.",
+        ],
+    )
+    assert "MAPK phosphorylation cascade" in best
+
+
+def test_enforce_intent_query_quotas_fills_missing_intents() -> None:
+    quotas = _enforce_intent_query_quotas(
+        stem="How does kinase inhibition change signaling?",
+        answer_choices={},
+        segments=["kinase inhibition signaling"],
+        intent_queries={"primary": [], "options": [], "methods": [], "adversarial": [], "reference": [], "factcheck": []},
+    )
+    assert len(quotas["primary"]) >= 1
+    assert len(quotas["methods"]) >= 1
+    assert len(quotas["reference"]) >= 1
+    assert len(quotas["adversarial"]) >= 1
+    assert len(quotas["factcheck"]) >= 1

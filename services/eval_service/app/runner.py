@@ -3,10 +3,14 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
-from services.api_gateway.app.main import app as gateway_app
+from services.api_gateway.app.main import ask as gateway_ask
+from services.api_gateway.app.main import get_run as gateway_get_run
+from services.api_gateway.app.main import get_trace as gateway_get_trace
 from services.orchestrator.app.policy import has_exact_pricing
+from shared.schemas.api import AskRequest
+from shared.schemas.domain import Constraints, Mode
 
 from .evaluator import evaluate, load_questions
 from .schemas import Prediction
@@ -56,42 +60,77 @@ def _run_question(
     max_latency_s: int | None,
     max_cost_usd: float,
 ) -> dict[str, Any]:
-    client = TestClient(gateway_app)
+    constraints = {
+        "min_sources": min_sources if min_sources is not None else question.must_have_citations,
+        "max_cost_usd": max_cost_usd,
+    }
     if max_latency_s is not None:
-        ask_response = client.post(
-            "/v1/ask",
-            json={
-                "question": question.question,
-                "mode": mode,
-                "providers": providers,
-                "constraints": {
-                    "min_sources": min_sources if min_sources is not None else question.must_have_citations,
-                    "max_latency_s": max_latency_s,
-                    "max_cost_usd": max_cost_usd,
-                },
+        constraints["max_latency_s"] = max_latency_s
+    ask_payload = AskRequest(
+        question=question.question,
+        mode=Mode(mode),
+        providers=providers,
+        constraints=Constraints.model_validate(constraints),
+    )
+    try:
+        ask_response = gateway_ask(ask_payload)
+    except HTTPException as exc:
+        return {
+            "idx": idx,
+            "question_id": question.id,
+            "run_id": "n/a",
+            "run_status": "failed",
+            "failure_reason": f"ask_http_{exc.status_code}",
+            "usage": {
+                "cost_usd": 0.0,
+                "latency_s": 0.0,
+                "tokens_input": 0,
+                "tokens_output": 0,
+                "cost_exact": True,
             },
-        )
-    else:
-        ask_response = client.post(
-            "/v1/ask",
-            json={
-                "question": question.question,
-                "mode": mode,
-                "providers": providers,
-                "constraints": {
-                    "min_sources": min_sources if min_sources is not None else question.must_have_citations,
-                    "max_cost_usd": max_cost_usd,
-                },
+            "quality": {
+                "citation_coverage": 0.0,
+                "unsupported_claims": 1,
+                "contradiction_flags": 0,
             },
-        )
-    ask_response.raise_for_status()
-    run_id = ask_response.json()["run_id"]
-    run_response = client.get(f"/v1/runs/{run_id}").json()
+            "prediction": Prediction(
+                id=question.id,
+                answer_text="",
+                answer_confidence=0.0,
+                citation_count=0,
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "idx": idx,
+            "question_id": question.id,
+            "run_id": "n/a",
+            "run_status": "failed",
+            "failure_reason": f"ask_error_{type(exc).__name__}",
+            "usage": {
+                "cost_usd": 0.0,
+                "latency_s": 0.0,
+                "tokens_input": 0,
+                "tokens_output": 0,
+                "cost_exact": True,
+            },
+            "quality": {
+                "citation_coverage": 0.0,
+                "unsupported_claims": 1,
+                "contradiction_flags": 0,
+            },
+            "prediction": Prediction(
+                id=question.id,
+                answer_text="",
+                answer_confidence=0.0,
+                citation_count=0,
+            ),
+        }
+    run_id = ask_response.run_id
+    run_response = gateway_get_run(run_id).model_dump(mode="json")
     run_status = str(run_response.get("status", ""))
     usage = run_response.get("usage") or {}
-    trace_response = client.get(f"/v1/runs/{run_id}/trace")
-    trace_response.raise_for_status()
-    trace_payload = trace_response.json() or {}
+    trace_payload = gateway_get_trace(run_id).model_dump(mode="json") or {}
     quality = trace_payload.get("quality_gates", {})
     provider_usage = trace_payload.get("provider_usage") or []
     cost_exact = True

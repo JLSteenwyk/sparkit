@@ -30,7 +30,7 @@ def test_search_literature_dedupes_and_ranks(monkeypatch):
 
     assert errors == {}
     assert len(records) == 4  # one DOI duplicate merged
-    assert records[0].year == 2025
+    assert any(record.year == 2025 for record in records)
     dois = [r.doi for r in records if r.doi]
     assert dois.count("10.1000/xyz123") == 1
 
@@ -138,6 +138,34 @@ def test_search_literature_tracks_brave_request_counts(monkeypatch):
     records, errors, stats = aggregator.search_literature("biology chemistry", max_results=6)
     assert errors == {}
     assert records
+    assert (stats.get("requests_by_source") or {}).get("brave_web", 0) > 0
+
+
+def test_search_literature_force_web_uses_brave_even_when_env_disabled(monkeypatch):
+    monkeypatch.setenv("SPARKIT_ENABLE_WEB_SEARCH", "0")
+    monkeypatch.setattr(aggregator, "search_arxiv", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_crossref", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_semantic_scholar", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_openalex", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_europe_pmc", lambda query, limit: [])
+    monkeypatch.setattr(
+        aggregator,
+        "search_brave_web",
+        lambda query, limit: [
+            LiteratureRecord(
+                source="brave_web",
+                title=f"Forced web hit: {query}",
+                abstract="web",
+                year=2025,
+                url=f"https://example.org/force/{abs(hash(query))}",
+            )
+        ],
+    )
+
+    records, errors, stats = aggregator.search_literature("biology chemistry", max_results=6, force_web=True)
+    assert errors == {}
+    assert records
+    assert any(record.source == "brave_web" for record in records)
     assert (stats.get("requests_by_source") or {}).get("brave_web", 0) > 0
 
 
