@@ -28,6 +28,13 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class RunExecutor:
     def __init__(self, store: "RunStore") -> None:
         self.store = store
@@ -147,6 +154,9 @@ class RunStore:
             "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/sparkit"
         )
         self._initialized = False
+        self._memory_fallback = _env_bool("SPARKIT_ENABLE_MEMORY_FALLBACK", True)
+        self._use_memory = False
+        self._memory_rows: dict[str, dict[str, Any]] = {}
         self._executor = RunExecutor(self)
 
     def _conn(self) -> psycopg.Connection:
@@ -162,9 +172,14 @@ class RunStore:
             return
 
         # Schema is managed by Alembic migrations; this only verifies connectivity.
-        with self._conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
+        try:
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+        except psycopg.OperationalError:
+            if not self._memory_fallback:
+                raise
+            self._use_memory = True
         self._initialized = True
 
     def _default_state(self, run_id: str) -> dict[str, Any]:
@@ -241,6 +256,25 @@ class RunStore:
         self._initialize()
         state = self._default_state(run.run_id)
         state_payload = self._serialize_state(state)
+        row_payload = {
+            "run_id": run.run_id,
+            "question": run.question,
+            "mode": run.mode.value,
+            "status": run.status.value,
+            "constraints_json": json.dumps(run.constraints.model_dump(mode="json")),
+            "answer_style": run.answer_style,
+            "providers_json": json.dumps(run.providers),
+            "include_trace": run.include_trace,
+            "prompt_version": run.prompt_version,
+            "config_version": run.config_version,
+            "reproducibility_json": json.dumps(run.reproducibility),
+            "created_at": run.created_at,
+            "updated_at": run.updated_at,
+            **state_payload,
+        }
+        if self._use_memory:
+            self._memory_rows[run.run_id] = row_payload
+            return run.run_id
 
         with self._conn() as conn:
             with conn.cursor() as cur:
@@ -258,28 +292,15 @@ class RunStore:
                         %(citations_json)s, %(trace_json)s
                     )
                     """,
-                    {
-                        "run_id": run.run_id,
-                        "question": run.question,
-                        "mode": run.mode.value,
-                        "status": run.status.value,
-                        "constraints_json": json.dumps(run.constraints.model_dump(mode="json")),
-                        "answer_style": run.answer_style,
-                        "providers_json": json.dumps(run.providers),
-                        "include_trace": run.include_trace,
-                        "prompt_version": run.prompt_version,
-                        "config_version": run.config_version,
-                        "reproducibility_json": json.dumps(run.reproducibility),
-                        "created_at": run.created_at,
-                        "updated_at": run.updated_at,
-                        **state_payload,
-                    },
+                    row_payload,
                 )
             conn.commit()
         return run.run_id
 
     def _get_row(self, run_id: str) -> dict[str, Any] | None:
         self._initialize()
+        if self._use_memory:
+            return self._memory_rows.get(run_id)
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM runs WHERE run_id = %s", (run_id,))
@@ -307,6 +328,13 @@ class RunStore:
             return "terminal"
         if run.status == Status.CANCELLING:
             return "already_cancelling"
+        if self._use_memory:
+            row = self._memory_rows.get(run_id)
+            if row is None:
+                return "not_found"
+            row["status"] = Status.CANCELLING.value
+            row["updated_at"] = now
+            return "cancelled"
 
         with self._conn() as conn:
             with conn.cursor() as cur:
@@ -326,6 +354,13 @@ class RunStore:
         if not fields:
             return
         self._initialize()
+        if self._use_memory:
+            row = self._memory_rows.get(run_id)
+            if row is None:
+                return
+            row.update(fields)
+            self._memory_rows[run_id] = row
+            return
         assignments = ", ".join([f"{key} = %({key})s" for key in fields])
         query = f"UPDATE runs SET {assignments} WHERE run_id = %(run_id)s"
         with self._conn() as conn:

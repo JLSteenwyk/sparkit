@@ -111,6 +111,23 @@ def _rewrite_queries(query: str, max_extra: int = 1) -> list[str]:
     return [query, *deduped]
 
 
+def _dedupe_queries(queries: list[str], max_items: int = 8) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        compact = re.sub(r"\s+", " ", (query or "").replace("\n", " ")).strip(" .;:,")
+        if not compact:
+            continue
+        key = compact.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(compact)
+        if len(out) >= max_items:
+            break
+    return out
+
+
 def _relevance_score(record: LiteratureRecord, query_tokens: set[str]) -> float:
     hay = f"{record.title} {record.abstract or ''}".lower()
     overlap = sum(1 for token in query_tokens if token in hay)
@@ -219,6 +236,15 @@ def _passes_quality_policy(record: LiteratureRecord) -> bool:
     return True
 
 
+def _is_dns_resolution_error(message: str) -> bool:
+    lowered = (message or "").lower()
+    return (
+        "name or service not known" in lowered
+        or "temporary failure in name resolution" in lowered
+        or "nodename nor servname provided" in lowered
+    )
+
+
 def search_literature(
     query: str,
     max_results: int = 12,
@@ -238,7 +264,7 @@ def search_literature(
             ("europe_pmc", search_europe_pmc),
         ]
     web_enabled = force_web or str(os.getenv("SPARKIT_ENABLE_WEB_SEARCH", "0")).lower() in {"1", "true", "yes"}
-    if live_enabled and web_enabled:
+    if web_enabled and bool(os.getenv("BRAVE_SEARCH_API_KEY")):
         adapters.append(("brave_web", search_brave_web))
 
     combined: list[LiteratureRecord] = []
@@ -248,10 +274,14 @@ def search_literature(
 
     local_fraction = max_results if not live_enabled else max(2, max_results // 3)
     local_enabled = str(os.getenv("SPARKIT_ENABLE_LOCAL_CORPUS", "1")).lower() not in {"0", "false", "no"}
+    local_store = LocalCorpusStore()
     if local_enabled:
         try:
-            local_records = LocalCorpusStore().query(query=query, max_results=local_fraction)
-            combined.extend(local_records)
+            local_queries = _dedupe_queries([query, *rewritten_queries], max_items=3)
+            local_combined: list[LiteratureRecord] = []
+            for local_query in local_queries:
+                local_combined.extend(local_store.query(query=local_query, max_results=local_fraction))
+            combined.extend(_dedupe_records(local_combined, max_results=max(4, local_fraction * 2)))
         except Exception as exc:  # noqa: BLE001
             strict_local = str(os.getenv("SPARKIT_LOCAL_CORPUS_REQUIRED", "0")).lower() in {"1", "true", "yes"}
             if strict_local:
@@ -290,6 +320,37 @@ def search_literature(
             if not any_success and last_error:
                 errors[f"{source_name}:{rewritten}"] = last_error
 
+    # If scholarly APIs failed (common DNS/runtime issue), auto-fallback to Brave if key exists.
+    brave_fallback_enabled = str(os.getenv("SPARKIT_ENABLE_BRAVE_FALLBACK", "1")).lower() in {"1", "true", "yes"}
+    brave_key_present = bool(os.getenv("BRAVE_SEARCH_API_KEY"))
+    brave_attempted = request_counts.get("brave_web", 0) > 0
+    scholarly_successes = sum(
+        count for source, count in success_counts.items() if source not in {"brave_web", "local_corpus"}
+    )
+    dns_error_count = sum(1 for message in errors.values() if _is_dns_resolution_error(message))
+    if brave_fallback_enabled and brave_key_present and not brave_attempted:
+        if live_enabled and dns_error_count > 0 and (scholarly_successes == 0 or dns_error_count >= max(1, len(adapters) // 2)):
+            for rewritten in rewritten_queries:
+                attempted = [rewritten]
+                relaxed = _relax_query(rewritten)
+                if relaxed and relaxed.lower() != rewritten.lower():
+                    attempted.append(relaxed)
+                last_error: str | None = None
+                any_success = False
+                try:
+                    for candidate in attempted:
+                        request_counts["brave_web"] += 1
+                        hits = search_brave_web(candidate, per_source)
+                        if hits:
+                            combined.extend(hits)
+                            success_counts["brave_web"] += 1
+                            any_success = True
+                            break
+                except Exception as exc:  # noqa: BLE001
+                    last_error = str(exc)
+                if not any_success and last_error:
+                    errors[f"brave_web_fallback:{rewritten}"] = last_error
+
     ranked = sorted(
         combined,
         key=lambda x: (_relevance_score(x, query_tokens) + (0.6 * _quality_score(x))),
@@ -315,11 +376,38 @@ def search_literature(
         seen.add(key)
         deduped.append(record)
 
+    # Hydrate local corpus with top retrieved records so future calls can survive network outages.
+    if local_enabled and str(os.getenv("SPARKIT_LOCAL_CORPUS_HYDRATE", "1")).lower() in {"1", "true", "yes"}:
+        hydrate_cap = max(1, min(len(deduped), int(os.getenv("SPARKIT_LOCAL_CORPUS_HYDRATE_CAP", "12"))))
+        for record in deduped[:hydrate_cap]:
+            try:
+                hydrate_text = record.abstract or record.title
+                local_store.upsert_document(record=record, text=hydrate_text)
+            except Exception:
+                # Hydration is best-effort and should never break retrieval.
+                pass
+
     diverse = _limit_source_dominance(deduped, max_results=max_results)
     stats = {
         "requests_by_source": dict(request_counts),
         "successful_requests_by_source": dict(success_counts),
         "filtered_low_quality": {"count": filtered_low_quality},
         "filtered_domain_policy": {"count": filtered_domain_policy},
+        "dns_error_count": dns_error_count,
+        "brave_fallback_used": bool(success_counts.get("brave_web", 0) > 0 and not brave_attempted),
     }
     return diverse, errors, stats
+
+
+def _dedupe_records(records: list[LiteratureRecord], max_results: int) -> list[LiteratureRecord]:
+    out: list[LiteratureRecord] = []
+    seen: set[str] = set()
+    for record in records:
+        key = _dedupe_key(record)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(record)
+        if len(out) >= max_results:
+            break
+    return out

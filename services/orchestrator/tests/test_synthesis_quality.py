@@ -30,7 +30,10 @@ from services.orchestrator.app.engine import (
     _select_option_from_dossiers,
     _select_records_for_ingestion,
     _split_question_and_choices,
+    _apply_mcq_option_rescue,
 )
+from shared.schemas.domain import Status, TraceStage
+from datetime import datetime, timezone
 from services.retrieval_service.app.models import LiteratureRecord
 
 
@@ -238,6 +241,70 @@ def test_parse_mcq_option_scores_extracts_numeric_rows() -> None:
     assert scores["A"]["support"] == 0.2
     assert scores["A"]["contradiction"] == 0.8
     assert round(scores["B"]["net"], 2) == 0.65
+
+
+def test_mcq_option_rescue_overrides_when_low_confidence_and_margin_is_strong(monkeypatch) -> None:
+    monkeypatch.setenv("SPARKIT_ENABLE_MCQ_OPTION_RESCUE", "1")
+    monkeypatch.setenv("SPARKIT_MCQ_RESCUE_MIN_CONFIDENCE", "0.62")
+    monkeypatch.setenv("SPARKIT_MCQ_RESCUE_MIN_MARGIN", "0.04")
+    question = "Which is correct?\nAnswer Choices:\nA. alpha\nB. beta\nC. gamma"
+    scorer_stage = TraceStage(
+        name="mcq_option_scorer",
+        status=Status.COMPLETED,
+        model="test",
+        started_at=datetime.now(timezone.utc),
+        ended_at=datetime.now(timezone.utc),
+        artifacts={
+            "allowed_labels": ["A", "B", "C"],
+            "blended_scores": {
+                "A": {"blended": 0.01, "net": 0.02},
+                "B": {"blended": 0.31, "net": 0.33},
+                "C": {"blended": 0.10, "net": 0.09},
+            },
+        },
+    )
+    text, artifacts = _apply_mcq_option_rescue(
+        question=question,
+        final_text="<answer>A</answer>",
+        answer_confidence=0.40,
+        contradiction_flags=0,
+        stages=[scorer_stage],
+    )
+    assert text == "<answer>B</answer>"
+    assert artifacts["rescue_triggered"] is True
+    assert artifacts["rescue_applied"] is True
+    assert artifacts["selected_option"] == "B"
+    assert artifacts["rescue_margin"] > 0.04
+
+
+def test_mcq_option_rescue_skips_when_gate_not_triggered(monkeypatch) -> None:
+    monkeypatch.setenv("SPARKIT_ENABLE_MCQ_OPTION_RESCUE", "1")
+    monkeypatch.setenv("SPARKIT_MCQ_RESCUE_MIN_CONFIDENCE", "0.62")
+    question = "Which is correct?\nAnswer Choices:\nA. alpha\nB. beta"
+    scorer_stage = TraceStage(
+        name="mcq_option_scorer",
+        status=Status.COMPLETED,
+        model="test",
+        started_at=datetime.now(timezone.utc),
+        ended_at=datetime.now(timezone.utc),
+        artifacts={
+            "allowed_labels": ["A", "B"],
+            "blended_scores": {
+                "A": {"blended": 0.20, "net": 0.22},
+                "B": {"blended": 0.10, "net": 0.08},
+            },
+        },
+    )
+    text, artifacts = _apply_mcq_option_rescue(
+        question=question,
+        final_text="<answer>A</answer>",
+        answer_confidence=0.90,
+        contradiction_flags=0,
+        stages=[scorer_stage],
+    )
+    assert text == "<answer>A</answer>"
+    assert artifacts["rescue_triggered"] is False
+    assert artifacts["rescue_applied"] is False
 
 
 def test_mcq_option_scoring_prompt_has_required_format() -> None:

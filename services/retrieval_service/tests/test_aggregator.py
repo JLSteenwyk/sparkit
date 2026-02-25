@@ -116,6 +116,7 @@ def test_search_literature_retries_with_relaxed_query(monkeypatch):
 
 def test_search_literature_tracks_brave_request_counts(monkeypatch):
     monkeypatch.setenv("SPARKIT_ENABLE_WEB_SEARCH", "1")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-key")
     monkeypatch.setattr(aggregator, "search_arxiv", lambda query, limit: [])
     monkeypatch.setattr(aggregator, "search_crossref", lambda query, limit: [])
     monkeypatch.setattr(aggregator, "search_semantic_scholar", lambda query, limit: [])
@@ -143,6 +144,7 @@ def test_search_literature_tracks_brave_request_counts(monkeypatch):
 
 def test_search_literature_force_web_uses_brave_even_when_env_disabled(monkeypatch):
     monkeypatch.setenv("SPARKIT_ENABLE_WEB_SEARCH", "0")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-key")
     monkeypatch.setattr(aggregator, "search_arxiv", lambda query, limit: [])
     monkeypatch.setattr(aggregator, "search_crossref", lambda query, limit: [])
     monkeypatch.setattr(aggregator, "search_semantic_scholar", lambda query, limit: [])
@@ -169,8 +171,53 @@ def test_search_literature_force_web_uses_brave_even_when_env_disabled(monkeypat
     assert (stats.get("requests_by_source") or {}).get("brave_web", 0) > 0
 
 
+def test_search_literature_auto_brave_fallback_on_dns_errors(monkeypatch):
+    monkeypatch.setenv("SPARKIT_ENABLE_WEB_SEARCH", "0")
+    monkeypatch.setenv("SPARKIT_ENABLE_BRAVE_FALLBACK", "1")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-key")
+    monkeypatch.setattr(
+        aggregator,
+        "search_arxiv",
+        lambda query, limit: (_ for _ in ()).throw(RuntimeError("[Errno -2] Name or service not known")),
+    )
+    monkeypatch.setattr(
+        aggregator,
+        "search_crossref",
+        lambda query, limit: (_ for _ in ()).throw(RuntimeError("[Errno -2] Name or service not known")),
+    )
+    monkeypatch.setattr(
+        aggregator,
+        "search_semantic_scholar",
+        lambda query, limit: (_ for _ in ()).throw(RuntimeError("[Errno -2] Name or service not known")),
+    )
+    monkeypatch.setattr(aggregator, "search_openalex", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_europe_pmc", lambda query, limit: [])
+    monkeypatch.setattr(
+        aggregator,
+        "search_brave_web",
+        lambda query, limit: [
+            LiteratureRecord(
+                source="brave_web",
+                title=f"Brave fallback hit: {query}",
+                abstract="web",
+                year=2025,
+                url=f"https://example.org/fallback/{abs(hash(query))}",
+            )
+        ],
+    )
+
+    records, _errors, stats = aggregator.search_literature("biology chemistry", max_results=6)
+    assert records
+    assert any(record.source == "brave_web" for record in records)
+    assert stats.get("brave_fallback_used") is True
+
+
 def test_search_literature_can_run_local_only(monkeypatch):
     monkeypatch.setenv("SPARKIT_ENABLE_LIVE_RETRIEVAL", "0")
+    monkeypatch.setenv("SPARKIT_ENABLE_LOCAL_CORPUS", "1")
+    monkeypatch.setenv("SPARKIT_MIN_QUALITY_SCORE", "0")
+    monkeypatch.setenv("SPARKIT_EVIDENCE_ALLOW_DOMAINS", "")
+    monkeypatch.setenv("SPARKIT_EVIDENCE_DENY_DOMAINS", "")
     monkeypatch.setattr(
         aggregator.LocalCorpusStore,
         "query",

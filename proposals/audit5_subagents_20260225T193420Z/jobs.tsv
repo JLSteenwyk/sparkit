@@ -1,0 +1,5 @@
+001	Retrieval Coverage Auditor	Audit SPARKIT for retrieval recall/coverage failures on hard STEM questions. Focus on query decomposition, source diversity, dedup/rerank, and evidence gaps.
+002	Evidence Quality Auditor	Audit SPARKIT for evidence quality issues. Focus on source authority, recency handling, contradiction detection, and citation faithfulness.
+003	Reasoning Orchestrator Auditor	Audit SPARKIT orchestration and multi-stage reasoning. Focus on planner/critic/verifier loops, uncertainty handling, and tool-selection policy.
+004	Grading/Eval Auditor	Audit SPARKIT evaluation/grading robustness. Focus on MCQ extraction, exactMatch adjudication, grader agreement, calibration, and failure analysis.
+005	Systems/Throughput Auditor	Audit SPARKIT runtime performance and throughput. Focus on parallel retrieval, caching strategy, retries, budget controls, and throughput without quality degradation.

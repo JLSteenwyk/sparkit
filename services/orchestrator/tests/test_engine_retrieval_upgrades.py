@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from services.retrieval_service.app.models import LiteratureRecord
 from services.orchestrator.app.engine import (
     RetrievalPlan,
+    _build_retrieval_claim_slots,
     _build_claim_gap_queries,
     _candidate_option_labels_for_falsification,
     _build_falsification_queries,
@@ -12,6 +13,7 @@ from services.orchestrator.app.engine import (
     _enforce_intent_query_quotas,
     _difficulty_signals,
     _select_best_parallel_draft,
+    _marginal_coverage_rerank,
     _should_trigger_confidence_retry,
     _should_inject_claim_gap,
     _semantic_rerank_enabled_for_stage,
@@ -220,6 +222,71 @@ def test_difficulty_signals_marks_easy_with_strong_evidence() -> None:
     )
     assert profile == "easy"
     assert score < 0.2
+
+
+def test_build_retrieval_claim_slots_falls_back_to_segments_and_options(monkeypatch) -> None:
+    import services.orchestrator.app.engine as engine_mod
+
+    monkeypatch.setattr(
+        engine_mod,
+        "generate_text",
+        lambda *_args, **_kwargs: _FakeResult(success=False, text=""),
+    )
+    plan = RetrievalPlan(
+        segments=["kinase activation mechanism", "feedback inhibition in pathway"],
+        focus_terms=["kinase", "feedback"],
+        intent_queries={"primary": [], "options": [], "methods": [], "adversarial": [], "reference": [], "factcheck": []},
+        answer_choices={"A": "upregulation", "B": "downregulation"},
+    )
+    slots = _build_retrieval_claim_slots(
+        question="What is correct?\nAnswer Choices:\nA. upregulation\nB. downregulation",
+        retrieval_plan=plan,
+        planning_provider="openai",
+        max_items=6,
+    )
+    joined = " | ".join(slots).lower()
+    assert "kinase activation mechanism" in joined
+    assert "evidence for upregulation" in joined
+
+
+def test_marginal_coverage_rerank_prefers_additional_slot_coverage() -> None:
+    records = [
+        LiteratureRecord(
+            title="ERK phosphorylation evidence in MAPK signaling",
+            url="https://example.org/a",
+            source="test",
+            abstract="ERK phosphorylation confirms downstream MAPK activation.",
+            doi=None,
+            year=2024,
+        ),
+        LiteratureRecord(
+            title="MEK inhibitor data and RAF pathway suppression",
+            url="https://example.org/b",
+            source="test",
+            abstract="MEK inhibition suppresses RAF-MEK-ERK cascade with inhibitor specificity.",
+            doi=None,
+            year=2023,
+        ),
+        LiteratureRecord(
+            title="General background on cell signaling",
+            url="https://example.org/c",
+            source="test",
+            abstract="Broad overview without mechanistic details.",
+            doi=None,
+            year=2022,
+        ),
+    ]
+    ranked = _marginal_coverage_rerank(
+        question="Which mechanism explains MAPK inhibition response?",
+        records=records,
+        claim_slots=["ERK phosphorylation evidence", "MEK inhibitor specificity"],
+        top_k=2,
+        boost_terms=["MAPK", "inhibition"],
+    )
+    assert len(ranked) == 2
+    titles = " | ".join(item.title for item in ranked)
+    assert "ERK phosphorylation evidence" in titles
+    assert "MEK inhibitor data" in titles
 
 
 def test_confidence_retry_triggers_for_low_confidence() -> None:

@@ -415,6 +415,25 @@ def _run_retrieval_rounds(
     all_records: list[LiteratureRecord] = []
     aggregate_errors: dict[str, str] = {}
     mutable_rounds = [(name, list(queries)) for name, queries in rounds]
+    claim_slots = _build_retrieval_claim_slots(
+        question=question,
+        retrieval_plan=retrieval_plan,
+        planning_provider=provider_plan.planning,
+        max_items=_env_int("SPARKIT_STEPWISE_CLAIM_SLOT_MAX", 8, minimum=3),
+    )
+    claim_slot_tokens = {slot: set(_tokenize(slot)) for slot in claim_slots}
+    covered_slots: set[str] = set()
+    if claim_slots:
+        stages.append(
+            TraceStage(
+                name="retrieval_claim_slots",
+                status=Status.COMPLETED,
+                model=provider_plan.planning,
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={"enabled": True, "claim_slots": claim_slots},
+            )
+        )
 
     for stage_idx, (stage_name, queries) in enumerate(mutable_rounds, start=1):
         elapsed_s = (datetime.now(timezone.utc) - started).total_seconds()
@@ -437,17 +456,42 @@ def _run_retrieval_rounds(
         stage_records: list[LiteratureRecord] = []
         stage_errors: dict[str, str] = {}
         stage_brave_requests = 0
+        resolved_queries: list[str] = []
         for query in queries:
-            found, errors, stats = search_literature(query, max_results=effort.retrieval_min_results)
+            resolved_query = query
+            if claim_slots and _env_bool("SPARKIT_ENABLE_STEPWISE_QUERY_CONDITIONING", True):
+                unresolved = [slot for slot in claim_slots if slot not in covered_slots]
+                if unresolved:
+                    max_slots = _env_int("SPARKIT_STEPWISE_QUERY_CONDITIONING_SLOTS", 1, minimum=1)
+                    additions: list[str] = []
+                    ql = query.lower()
+                    for slot in unresolved:
+                        if slot.lower() in ql:
+                            continue
+                        additions.append(slot)
+                        if len(additions) >= max_slots:
+                            break
+                    if additions:
+                        resolved_query = _relax_retrieval_query(f"{query} {' '.join(additions)}")
+            resolved_queries.append(resolved_query)
+            found, errors, stats = search_literature(resolved_query, max_results=effort.retrieval_min_results)
             stage_records.extend(found)
             for source, err in errors.items():
-                stage_errors[f"{source}:{query}"] = err
+                stage_errors[f"{source}:{resolved_query}"] = err
             stage_brave_requests += int((stats.get("requests_by_source") or {}).get("brave_web", 0))
 
         deduped_stage = _dedupe_records(stage_records)
+        if claim_slots and _env_bool("SPARKIT_ENABLE_MARGINAL_COVERAGE_RERANK", True):
+            deduped_stage = _marginal_coverage_rerank(
+                question=question,
+                records=deduped_stage,
+                claim_slots=claim_slots,
+                top_k=min(len(deduped_stage), effort.retrieval_min_results),
+                boost_terms=retrieval_plan.focus_terms if retrieval_plan else None,
+            )
         semantic_rerank_enabled = _env_bool("SPARKIT_ENABLE_SEMANTIC_RERANK", False)
         if semantic_rerank_enabled and _semantic_rerank_enabled_for_stage(stage_name) and deduped_stage:
-            rerank_query = queries[0] if queries else question
+            rerank_query = resolved_queries[0] if resolved_queries else (queries[0] if queries else question)
             rerank_top_k = min(len(deduped_stage), effort.retrieval_min_results)
             deduped_stage = _semantic_rerank_records(
                 question=f"{question}\nFocused query: {rerank_query}",
@@ -455,6 +499,17 @@ def _run_retrieval_rounds(
                 provider=provider_plan.retrieval,
                 top_k=rerank_top_k,
             )
+        new_slot_hits = 0
+        if claim_slot_tokens and deduped_stage:
+            for record in deduped_stage:
+                text_tokens = set(_tokenize(f"{record.title} {record.abstract or ''}"))
+                for slot, tokens in claim_slot_tokens.items():
+                    if slot in covered_slots or not tokens:
+                        continue
+                    overlap = len(tokens & text_tokens)
+                    if overlap >= max(1, min(3, int(len(tokens) * 0.25))):
+                        covered_slots.add(slot)
+                        new_slot_hits += 1
         records_by_round[stage_name] = deduped_stage
         all_records.extend(deduped_stage)
         aggregate_errors.update(stage_errors)
@@ -494,8 +549,13 @@ def _run_retrieval_rounds(
                 ended_at=datetime.now(timezone.utc),
                 artifacts={
                     "queries": queries,
+                    "resolved_queries": resolved_queries,
                     "documents_retrieved": len(deduped_stage),
                     "new_unique_docs": new_unique_docs,
+                    "new_claim_slots_covered": new_slot_hits,
+                    "claim_slots_total": len(claim_slots),
+                    "claim_slots_covered_total": len(covered_slots),
+                    "marginal_coverage_reranked": bool(claim_slots and _env_bool("SPARKIT_ENABLE_MARGINAL_COVERAGE_RERANK", True)),
                     "semantic_reranked": bool(semantic_rerank_enabled and _semantic_rerank_enabled_for_stage(stage_name)),
                     "source_errors": stage_errors,
                     "brave_requests": stage_brave_requests,
@@ -1714,6 +1774,8 @@ def _finalize_answer_and_quality_gates(
     )
     should_abstain = len(abstain_reason_codes) >= 2
     disable_hard_abstain = _env_bool("SPARKIT_DISABLE_HARD_ABSTAIN", False)
+    if _question_has_answer_choices(context.question) and _env_bool("SPARKIT_MCQ_SOFT_ABSTAIN_DEFAULT", True):
+        disable_hard_abstain = True
 
     final_text = (
         draft_texts[0]
@@ -1782,6 +1844,27 @@ def _finalize_answer_and_quality_gates(
                 started_at=datetime.now(timezone.utc),
                 ended_at=datetime.now(timezone.utc),
                 artifacts={"abstained": False, "reasons": []},
+            )
+        )
+
+    allow_mcq_rescue = not (should_abstain and not disable_hard_abstain)
+    if allow_mcq_rescue:
+        rescue_start = datetime.now(timezone.utc)
+        final_text, rescue_artifacts = _apply_mcq_option_rescue(
+            question=context.question,
+            final_text=final_text,
+            answer_confidence=answer_conf,
+            contradiction_flags=verifier_result.contradiction_flags,
+            stages=stages,
+        )
+        stages.append(
+            TraceStage(
+                name="mcq_option_rescue",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=rescue_start,
+                ended_at=datetime.now(timezone.utc),
+                artifacts=rescue_artifacts,
             )
         )
 
@@ -2061,6 +2144,14 @@ def _dedupe_queries(queries: list[str], max_items: int = 8) -> list[str]:
     return out
 
 
+def _relax_retrieval_query(query: str, max_terms: int = 24) -> str:
+    compact = re.sub(r"\s+", " ", query.replace("\n", " ")).strip(" .;:,")
+    terms = compact.split()
+    if len(terms) > max_terms:
+        terms = terms[:max_terms]
+    return " ".join(terms)
+
+
 def _question_has_answer_choices(question: str) -> bool:
     lowered = question.lower()
     if "answer choices" in lowered:
@@ -2168,6 +2259,109 @@ def _select_confident_blended_option(
     if (top_row["blended"] - second_row["blended"]) < min_margin:
         return None
     return top_label
+
+
+def _latest_stage_artifacts(stages: list[TraceStage], name: str) -> dict[str, object]:
+    for stage in reversed(stages):
+        if stage.name != name:
+            continue
+        if isinstance(stage.artifacts, dict):
+            return stage.artifacts
+    return {}
+
+
+def _apply_mcq_option_rescue(
+    *,
+    question: str,
+    final_text: str,
+    answer_confidence: float,
+    contradiction_flags: int,
+    stages: list[TraceStage],
+) -> tuple[str, dict[str, object]]:
+    artifact: dict[str, object] = {
+        "rescue_triggered": False,
+        "rescue_applied": False,
+        "rescue_reason": [],
+        "rescue_margin": 0.0,
+    }
+    if not _env_bool("SPARKIT_ENABLE_MCQ_OPTION_RESCUE", True):
+        artifact["rescue_reason"] = ["disabled"]
+        return final_text, artifact
+    if not _question_has_answer_choices(question):
+        artifact["rescue_reason"] = ["not_mcq"]
+        return final_text, artifact
+
+    _stem, answer_choices = _split_question_and_choices(question)
+    if not answer_choices:
+        artifact["rescue_reason"] = ["no_choices_parsed"]
+        return final_text, artifact
+
+    current_letter = _extract_answer_letter(final_text or "")
+    min_conf = _env_float("SPARKIT_MCQ_RESCUE_MIN_CONFIDENCE", 0.62, minimum=0.0)
+    contradiction_threshold = _env_int("SPARKIT_MCQ_RESCUE_CONTRADICTION_THRESHOLD", 2, minimum=0)
+    force_missing_letter = _env_bool("SPARKIT_MCQ_RESCUE_IF_MISSING_LETTER", True)
+    trigger_reasons: list[str] = []
+    if answer_confidence < min_conf:
+        trigger_reasons.append(f"low_confidence<{min_conf:.2f}")
+    if contradiction_flags >= contradiction_threshold:
+        trigger_reasons.append(f"contradiction_flags>={contradiction_threshold}")
+    if force_missing_letter and not current_letter:
+        trigger_reasons.append("missing_mcq_letter")
+    artifact["rescue_reason"] = trigger_reasons
+    if not trigger_reasons:
+        return final_text, artifact
+
+    scorer_artifacts = _latest_stage_artifacts(stages, "mcq_option_scorer")
+    blended_scores = scorer_artifacts.get("blended_scores")
+    if not isinstance(blended_scores, dict) or not blended_scores:
+        artifact["rescue_reason"] = [*trigger_reasons, "no_blended_scores"]
+        return final_text, artifact
+
+    allowed_labels_raw = scorer_artifacts.get("allowed_labels")
+    if isinstance(allowed_labels_raw, list) and allowed_labels_raw:
+        allowed_labels = {str(label).upper() for label in allowed_labels_raw if str(label).upper() in answer_choices}
+    else:
+        allowed_labels = set(answer_choices.keys())
+
+    ranked: list[tuple[str, float, float]] = []
+    for label in sorted(allowed_labels):
+        row = blended_scores.get(label)
+        if not isinstance(row, dict):
+            continue
+        blended = float(row.get("blended", 0.0))
+        net = float(row.get("net", 0.0))
+        ranked.append((label, blended, net))
+    if not ranked:
+        artifact["rescue_reason"] = [*trigger_reasons, "no_rankable_scores"]
+        return final_text, artifact
+
+    ranked.sort(key=lambda item: (item[1], item[2], item[0]), reverse=True)
+    top_label, top_blended, _top_net = ranked[0]
+    second_blended = ranked[1][1] if len(ranked) > 1 else 0.0
+    margin = top_blended - second_blended
+    artifact["rescue_margin"] = round(margin, 6)
+    artifact["top_option"] = top_label
+    artifact["top_blended"] = round(top_blended, 6)
+    artifact["runner_up_blended"] = round(second_blended, 6)
+    artifact["current_option"] = current_letter
+    artifact["rescue_triggered"] = True
+
+    min_margin = _env_float("SPARKIT_MCQ_RESCUE_MIN_MARGIN", 0.04, minimum=0.0)
+    min_top = _env_float("SPARKIT_MCQ_RESCUE_MIN_TOP_SCORE", 0.02, minimum=0.0)
+    if top_blended < min_top:
+        artifact["rescue_reason"] = [*trigger_reasons, "top_score_below_threshold"]
+        return final_text, artifact
+    if margin < min_margin:
+        artifact["rescue_reason"] = [*trigger_reasons, "margin_below_threshold"]
+        return final_text, artifact
+    if current_letter == top_label:
+        artifact["rescue_reason"] = [*trigger_reasons, "already_selected"]
+        return final_text, artifact
+
+    artifact["rescue_applied"] = True
+    artifact["selected_option"] = top_label
+    artifact["rescue_reason"] = [*trigger_reasons, "override_applied"]
+    return f"<answer>{top_label}</answer>", artifact
 
 
 def _normalize_mcq_text(value: str) -> str:
@@ -2344,6 +2538,108 @@ def _candidate_option_labels_for_falsification(
     ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
     cap = max(1, max_options)
     return [label for _, label in ranked[:cap]]
+
+
+def _build_retrieval_claim_slots(
+    question: str,
+    retrieval_plan: RetrievalPlan | None,
+    planning_provider: str,
+    max_items: int = 8,
+) -> list[str]:
+    if not _env_bool("SPARKIT_ENABLE_STEPWISE_CLAIM_SLOTS", True):
+        return []
+    stem, answer_choices = _split_question_and_choices(question)
+    choices_line = " | ".join(f"{label}: {text}" for label, text in sorted(answer_choices.items())) or "(none)"
+    segment_line = " | ".join((retrieval_plan.segments if retrieval_plan else [])[:6]) or stem
+    prompt = (
+        "Create retrieval claim slots for a hard STEM QA task.\n"
+        "Return exactly one line:\n"
+        "slots: slot1 | slot2 | slot3 | slot4\n"
+        "Rules: each slot is short, concrete, evidence-oriented, and non-overlapping.\n"
+        "If MCQ choices exist, include discriminative slots that help eliminate options.\n\n"
+        f"Question stem: {stem}\n"
+        f"Answer choices: {choices_line}\n"
+        f"Current segments: {segment_line}\n"
+    )
+    result = generate_text(planning_provider, prompt, max_tokens=220)
+    slots: list[str] = []
+    if result.success and result.text.strip():
+        match = re.search(r"slots\s*:\s*(.+)", result.text, flags=re.IGNORECASE)
+        blob = match.group(1) if match else result.text
+        slots = _dedupe_queries([item.strip() for item in blob.split("|") if item.strip()], max_items=max_items)
+    if not slots:
+        seed = list((retrieval_plan.segments if retrieval_plan else [])[:4]) or [stem]
+        if answer_choices:
+            seed.extend([f"evidence for {text}" for text in answer_choices.values()])
+            seed.extend([f"evidence against {text}" for text in answer_choices.values()])
+        slots = _dedupe_queries(seed, max_items=max_items)
+    return slots[:max_items]
+
+
+def _slot_hit_count_for_record(record: LiteratureRecord, slot_tokens: dict[str, set[str]]) -> int:
+    text_tokens = set(_tokenize(f"{record.title} {record.abstract or ''}"))
+    if not text_tokens:
+        return 0
+    hits = 0
+    for tokens in slot_tokens.values():
+        if not tokens:
+            continue
+        overlap = len(tokens & text_tokens)
+        if overlap >= max(1, min(3, int(len(tokens) * 0.25))):
+            hits += 1
+    return hits
+
+
+def _marginal_coverage_rerank(
+    *,
+    question: str,
+    records: list[LiteratureRecord],
+    claim_slots: list[str],
+    top_k: int,
+    boost_terms: list[str] | None = None,
+) -> list[LiteratureRecord]:
+    if not records:
+        return []
+    if not claim_slots:
+        return records[:top_k]
+    slot_tokens = {slot: set(_tokenize(slot)) for slot in claim_slots}
+    covered: set[str] = set()
+    selected: list[LiteratureRecord] = []
+    remaining = list(records)
+    alpha = _env_float("SPARKIT_MARGINAL_RERANK_ALPHA", 0.65, minimum=0.0)
+    beta = _env_float("SPARKIT_MARGINAL_RERANK_BETA", 0.35, minimum=0.0)
+    gamma = _env_float("SPARKIT_MARGINAL_RERANK_GAMMA", 0.20, minimum=0.0)
+    while remaining and len(selected) < top_k:
+        best_idx = 0
+        best_score = float("-inf")
+        for idx, record in enumerate(remaining):
+            base = _record_relevance_score(question, record, boost_terms)
+            text_tokens = set(_tokenize(f"{record.title} {record.abstract or ''}"))
+            new_hits = 0
+            total_hits = 0
+            for slot, tokens in slot_tokens.items():
+                if not tokens:
+                    continue
+                overlap = len(tokens & text_tokens)
+                hit = overlap >= max(1, min(3, int(len(tokens) * 0.25)))
+                if hit:
+                    total_hits += 1
+                    if slot not in covered:
+                        new_hits += 1
+            score = (alpha * base) + (beta * float(new_hits)) + (gamma * float(total_hits))
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+        chosen = remaining.pop(best_idx)
+        selected.append(chosen)
+        text_tokens = set(_tokenize(f"{chosen.title} {chosen.abstract or ''}"))
+        for slot, tokens in slot_tokens.items():
+            if not tokens:
+                continue
+            overlap = len(tokens & text_tokens)
+            if overlap >= max(1, min(3, int(len(tokens) * 0.25))):
+                covered.add(slot)
+    return selected
 
 
 def _build_falsification_queries(

@@ -1,6 +1,6 @@
 # Progress Tracker
 
-Last updated: 2026-02-22
+Last updated: 2026-02-25
 
 ## Project status
 - Overall phase: Advanced pipeline implementation
@@ -23,15 +23,26 @@ Last updated: 2026-02-22
 - Status: In progress
 
 ## Current sprint focus
-- Full HLE Gold bio/chem 149-question benchmark execution and comparison (SPARKIT vs direct single-call).
-- Cost/usage accuracy hardening and provider-response robustness fixes.
-- Retrieval evidence quality improvements to reduce off-topic sources and improve chemistry/biology answer grounding.
-- Active execution: HLE-gold `single_*` SPARKIT and direct-call baselines running in tmux with safe parallelization.
+- Align benchmark scoring with strict MCQ/exactMatch behavior and debug grading path failures.
+- Establish a stable 10-question barometer subset for fast SPARKIT-vs-direct comparisons.
+- Keep results directory clean and focused on current benchmark artifacts.
 
 ## Blockers
 - None.
 
 ## Recent updates
+- 2026-02-25: Verified strict evaluator path is active (`multipleChoice` letter match + `exactMatch` dual LLM graders).
+- 2026-02-25: Fixed OpenAI exact-match grader fallback for GPT-5-family 400/404 responses in `services/orchestrator/app/providers/clients.py`.
+- 2026-02-25: Ran rephrase-then-answer A/B:
+  - HLE-10: no gain vs direct; higher cost/latency.
+  - HLE-20: no gain vs direct; higher cost/latency.
+- 2026-02-25: Added locked barometer subset:
+  - `benchmarks/hle_gold_bio_chem/questions_barometer10_direct30.json`
+  - Validated direct baseline at `0.3`:
+    - `benchmarks/results/barometer10_direct_openai_v3_20260225T183524Z`
+- 2026-02-25: Cleaned result tracking surface:
+  - Kept only active runs in `benchmarks/results/`.
+  - Moved older runs to `benchmarks/results/archive_outdated_20260225/`.
 - 2026-02-22: Implemented top-6 retrieval upgrade v1 in orchestrator:
   - Added explicit falsification retrieval round (`retrieval_round_4_falsification`) with option-focused query generation.
   - Added optional semantic reranking hook for retrieval and final ingestion selection.

@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha1
+from threading import RLock
 
 import psycopg
 from psycopg.rows import dict_row
@@ -78,12 +79,19 @@ class CorpusSearchHit:
     score: float
 
 
+_MEM_LOCK = RLock()
+_MEM_DOCS: dict[str, dict[str, object]] = {}
+_MEM_CHUNKS: list[dict[str, object]] = []
+
+
 class LocalCorpusStore:
     def __init__(self, database_url: str | None = None) -> None:
         self.database_url = database_url or os.getenv(
             "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/sparkit"
         )
         self._ready = False
+        self._memory_fallback = _env_bool("SPARKIT_ENABLE_MEMORY_FALLBACK", True)
+        self._use_memory = False
 
     def _conn(self) -> psycopg.Connection:
         return psycopg.connect(self.database_url, row_factory=dict_row)
@@ -91,48 +99,53 @@ class LocalCorpusStore:
     def ensure_schema(self) -> None:
         if self._ready:
             return
-        with self._conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS corpus_documents (
-                        corpus_doc_id TEXT PRIMARY KEY,
-                        source TEXT NOT NULL,
-                        title TEXT NOT NULL,
-                        abstract TEXT NULL,
-                        authors_json TEXT NOT NULL,
-                        year INTEGER NULL,
-                        doi TEXT NULL,
-                        url TEXT NOT NULL,
-                        domain TEXT NULL,
-                        subdomain TEXT NULL,
-                        created_at TIMESTAMPTZ NOT NULL,
-                        updated_at TIMESTAMPTZ NOT NULL
+        try:
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS corpus_documents (
+                            corpus_doc_id TEXT PRIMARY KEY,
+                            source TEXT NOT NULL,
+                            title TEXT NOT NULL,
+                            abstract TEXT NULL,
+                            authors_json TEXT NOT NULL,
+                            year INTEGER NULL,
+                            doi TEXT NULL,
+                            url TEXT NOT NULL,
+                            domain TEXT NULL,
+                            subdomain TEXT NULL,
+                            created_at TIMESTAMPTZ NOT NULL,
+                            updated_at TIMESTAMPTZ NOT NULL
+                        )
+                        """
                     )
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS corpus_chunks (
-                        chunk_id TEXT PRIMARY KEY,
-                        corpus_doc_id TEXT NOT NULL REFERENCES corpus_documents(corpus_doc_id) ON DELETE CASCADE,
-                        chunk_index INTEGER NOT NULL,
-                        text TEXT NOT NULL,
-                        token_count INTEGER NOT NULL,
-                        created_at TIMESTAMPTZ NOT NULL
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS corpus_chunks (
+                            chunk_id TEXT PRIMARY KEY,
+                            corpus_doc_id TEXT NOT NULL REFERENCES corpus_documents(corpus_doc_id) ON DELETE CASCADE,
+                            chunk_index INTEGER NOT NULL,
+                            text TEXT NOT NULL,
+                            token_count INTEGER NOT NULL,
+                            created_at TIMESTAMPTZ NOT NULL
+                        )
+                        """
                     )
-                    """
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_corpus_documents_domain ON corpus_documents(domain)"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_corpus_documents_updated_at ON corpus_documents(updated_at DESC)"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_corpus_chunks_doc ON corpus_chunks(corpus_doc_id)"
-                )
-            conn.commit()
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_corpus_documents_domain ON corpus_documents(domain)"
+                    )
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_corpus_documents_updated_at ON corpus_documents(updated_at DESC)"
+                    )
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_corpus_chunks_doc ON corpus_chunks(corpus_doc_id)"
+                    )
+                conn.commit()
+        except psycopg.OperationalError:
+            if not self._memory_fallback:
+                raise
+            self._use_memory = True
         self._ready = True
 
     def upsert_document(
@@ -148,6 +161,37 @@ class LocalCorpusStore:
         if not chunks:
             chunks = _chunk_text(record.abstract or "")
         now = _now()
+        if self._use_memory:
+            with _MEM_LOCK:
+                _MEM_DOCS[doc_id] = {
+                    "corpus_doc_id": doc_id,
+                    "source": record.source,
+                    "title": record.title,
+                    "abstract": record.abstract or "",
+                    "authors_json": json.dumps(record.authors),
+                    "year": record.year,
+                    "doi": record.doi,
+                    "url": record.url,
+                    "domain": domain,
+                    "subdomain": subdomain,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                global _MEM_CHUNKS
+                _MEM_CHUNKS = [row for row in _MEM_CHUNKS if row.get("corpus_doc_id") != doc_id]
+                for idx, chunk in enumerate(chunks):
+                    chunk_id = f"cchunk_{sha1(f'{doc_id}:{idx}'.encode('utf-8')).hexdigest()}"  # noqa: S324
+                    _MEM_CHUNKS.append(
+                        {
+                            "chunk_id": chunk_id,
+                            "corpus_doc_id": doc_id,
+                            "chunk_index": idx,
+                            "text": chunk,
+                            "token_count": len(_tokenize(chunk)),
+                            "created_at": now,
+                        }
+                    )
+            return doc_id
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -201,6 +245,53 @@ class LocalCorpusStore:
         tokens = _tokenize(query)[:8]
         if not tokens:
             return []
+        if self._use_memory:
+            query_tokens = set(tokens)
+            scored: dict[str, CorpusSearchHit] = {}
+            with _MEM_LOCK:
+                rows = list(_MEM_CHUNKS)
+                docs = dict(_MEM_DOCS)
+            for chunk in rows:
+                doc_id = str(chunk.get("corpus_doc_id"))
+                doc = docs.get(doc_id)
+                if not doc:
+                    continue
+                if domain and str(doc.get("domain") or "") != domain:
+                    continue
+                text = f"{doc.get('title','')} {chunk.get('text','')}"
+                hay_tokens = set(_tokenize(text))
+                overlap = len(query_tokens & hay_tokens)
+                if overlap == 0:
+                    continue
+                year = doc.get("year")
+                recency = (int(year) if isinstance(year, int) else 2000) / 10000.0
+                score = (2.0 * overlap) + recency
+                existing = scored.get(doc_id)
+                if existing and existing.score >= score:
+                    continue
+                scored[doc_id] = CorpusSearchHit(
+                    doc_id=doc_id,
+                    title=str(doc.get("title") or ""),
+                    abstract=str(chunk.get("text") or str(doc.get("abstract") or ""))[:1600],
+                    source="local_corpus",
+                    year=year if isinstance(year, int) else None,
+                    doi=str(doc.get("doi")) if doc.get("doi") else None,
+                    url=str(doc.get("url") or ""),
+                    score=score,
+                )
+            ranked = sorted(scored.values(), key=lambda item: item.score, reverse=True)[:max_results]
+            return [
+                LiteratureRecord(
+                    source=item.source,
+                    title=item.title,
+                    abstract=item.abstract,
+                    authors=[],
+                    year=item.year,
+                    doi=item.doi,
+                    url=item.url,
+                )
+                for item in ranked
+            ]
         like_clauses = " OR ".join([f"lower(c.text) LIKE %s OR lower(d.title) LIKE %s" for _ in tokens])
         domain_clause = " AND d.domain = %s" if domain else ""
         params: list[object] = []
@@ -269,3 +360,10 @@ class LocalCorpusStore:
             )
             for item in ranked
         ]
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}

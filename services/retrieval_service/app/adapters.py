@@ -32,6 +32,7 @@ _SCIENCE_HOST_KEYWORDS = (
     "rsc.org",
     "ieee.org",
     ".edu",
+    ".gov",
 )
 
 
@@ -312,13 +313,14 @@ def search_brave_web(query: str, limit: int = 5, timeout_s: float = 15.0) -> lis
         response = _get_with_retry(client, BRAVE_SEARCH_API_URL, params=params, headers=headers)
     results = response.json().get("web", {}).get("results", []) or []
     records: list[LiteratureRecord] = []
+    strict_host_filter = str(os.getenv("SPARKIT_BRAVE_STRICT_HOST_FILTER", "0")).lower() in {"1", "true", "yes"}
     for row in results:
         url = row.get("url")
         title = (row.get("title") or "").strip()
         if not url or not title:
             continue
         host = urlparse(url).netloc.lower()
-        if not any(keyword in host for keyword in _SCIENCE_HOST_KEYWORDS):
+        if strict_host_filter and not any(keyword in host for keyword in _SCIENCE_HOST_KEYWORDS):
             continue
         summary = (row.get("description") or "").strip() or None
         records.append(
