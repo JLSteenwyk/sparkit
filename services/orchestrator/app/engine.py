@@ -567,6 +567,18 @@ def _run_retrieval_rounds(
                 top_k=min(len(deduped_stage), effort.retrieval_min_results),
                 boost_terms=retrieval_plan.focus_terms if retrieval_plan else None,
             )
+        rcs_rerank_enabled = _env_bool("SPARKIT_ENABLE_RCS_RERANK", True)
+        rcs_applied = False
+        if rcs_rerank_enabled and _semantic_rerank_enabled_for_stage(stage_name) and deduped_stage:
+            rerank_query = resolved_queries[0] if resolved_queries else (queries[0] if queries else question)
+            rerank_top_k = min(len(deduped_stage), effort.retrieval_min_results)
+            deduped_stage = _rcs_rerank_records(
+                question=f"{question}\nFocused query: {rerank_query}",
+                records=deduped_stage,
+                provider=provider_plan.retrieval,
+                top_k=rerank_top_k,
+            )
+            rcs_applied = True
         semantic_rerank_enabled = _env_bool("SPARKIT_ENABLE_SEMANTIC_RERANK", False)
         if semantic_rerank_enabled and _semantic_rerank_enabled_for_stage(stage_name) and deduped_stage:
             rerank_query = resolved_queries[0] if resolved_queries else (queries[0] if queries else question)
@@ -646,6 +658,7 @@ def _run_retrieval_rounds(
                     "claim_slots_total": len(claim_slots),
                     "claim_slots_covered_total": len(covered_slots),
                     "marginal_coverage_reranked": bool(claim_slots and _env_bool("SPARKIT_ENABLE_MARGINAL_COVERAGE_RERANK", True)),
+                    "rcs_reranked": bool(rcs_applied),
                     "semantic_reranked": bool(semantic_rerank_enabled and _semantic_rerank_enabled_for_stage(stage_name)),
                     "source_errors": stage_errors,
                     "brave_requests": stage_brave_requests,
@@ -722,6 +735,34 @@ def _run_retrieval_rounds(
                             "to_stage": next_stage_name,
                             "injected_queries": gap_queries,
                             "injected_count": len(gap_queries),
+                            "next_stage_query_count_after_merge": len(merged_next),
+                        },
+                        )
+                    )
+        if _env_bool("SPARKIT_ENABLE_CITATION_TRAVERSAL_QUERIES", True) and stage_idx < len(mutable_rounds):
+            traversal_queries = _build_citation_traversal_queries(
+                records=deduped_stage,
+                max_items=_env_int("SPARKIT_CITATION_TRAVERSAL_MAX_QUERIES", 4, minimum=1),
+            )
+            if traversal_queries:
+                next_stage_name, next_stage_queries = mutable_rounds[stage_idx]
+                merged_next = _dedupe_queries(
+                    [*next_stage_queries, *traversal_queries],
+                    max_items=_env_int("SPARKIT_CITATION_TRAVERSAL_MAX_NEXT_QUERIES", 14, minimum=4),
+                )
+                mutable_rounds[stage_idx] = (next_stage_name, merged_next)
+                stages.append(
+                    TraceStage(
+                        name="retrieval_citation_traversal_loop",
+                        status=Status.COMPLETED,
+                        model="policy",
+                        started_at=datetime.now(timezone.utc),
+                        ended_at=datetime.now(timezone.utc),
+                        artifacts={
+                            "from_stage": stage_name,
+                            "to_stage": next_stage_name,
+                            "injected_queries": traversal_queries,
+                            "injected_count": len(traversal_queries),
                             "next_stage_query_count_after_merge": len(merged_next),
                         },
                     )
@@ -1464,9 +1505,16 @@ def _run_synthesis_phase(
                     "dossier_norm": dossier_norm,
                     "blended": blended,
                 }
+            eligible_labels, eligibility_details = _eligible_mcq_labels(
+                answer_choices=answer_choices,
+                allowed_labels=allowed_labels,
+                option_dossiers=option_dossiers,
+                option_scores=parsed_scores,
+                blended_scores=blended_scores,
+            )
             selected_letter: str | None = None
-            dossier_pool = {label: row for label, row in option_dossiers.items() if label in allowed_labels}
-            blended_pool = {label: row for label, row in blended_scores.items() if label in allowed_labels}
+            dossier_pool = {label: row for label, row in option_dossiers.items() if label in eligible_labels}
+            blended_pool = {label: row for label, row in blended_scores.items() if label in eligible_labels}
             dossier_selected = _select_option_from_dossiers(dossier_pool)
             if dossier_selected and dossier_selected in answer_choices:
                 selected_letter = dossier_selected
@@ -1505,6 +1553,8 @@ def _run_synthesis_phase(
                             "lexical_scores": lexical_scores,
                             "blended_scores": blended_scores,
                             "allowed_labels": allowed_labels,
+                            "eligible_labels": eligible_labels,
+                            "eligibility_details": eligibility_details,
                             "elimination_decisions": elimination_decisions,
                             "elimination_raw_output": (elimination_result.text or "")[:1200],
                             "option_evidence_packs": option_evidence_packs,
@@ -1531,7 +1581,7 @@ def _run_synthesis_phase(
                     provider_plan.synthesis, judge_prompt, max_tokens=min(220, synthesis_token_budget or 220)
                 )
                 selected_letter = _extract_answer_letter(judge_result.text or "")
-                if judge_result.success and selected_letter and selected_letter in allowed_labels:
+                if judge_result.success and selected_letter and selected_letter in eligible_labels:
                     draft = f"<answer>{selected_letter}</answer>"
                     draft_texts.append(draft)
                     _record_gen_usage(
@@ -1553,6 +1603,8 @@ def _run_synthesis_phase(
                                 "selected_option": selected_letter,
                                 "num_choices": len(answer_choices),
                                 "allowed_labels": allowed_labels,
+                                "eligible_labels": eligible_labels,
+                                "eligibility_details": eligibility_details,
                                 "elimination_decisions": elimination_decisions,
                                 "option_dossiers": option_dossiers,
                             },
@@ -1616,7 +1668,7 @@ def _run_synthesis_phase(
                     arbitration_prompt = _build_mcq_arbitration_prompt(
                         question=stem_question,
                         answer_choices=answer_choices,
-                        allowed_labels=allowed_labels,
+                        allowed_labels=eligible_labels,
                         option_dossiers=option_dossiers,
                         blended_scores=blended_scores,
                         lexical_scores=lexical_scores,
@@ -1627,7 +1679,7 @@ def _run_synthesis_phase(
                         max_tokens=min(180, synthesis_token_budget or 180),
                     )
                     parsed = _extract_answer_letter(arbitration_result.text or "")
-                    if parsed and parsed in allowed_labels:
+                    if parsed and parsed in eligible_labels:
                         arbitration_selected = parsed
                     else:
                         stages.append(
@@ -1646,18 +1698,20 @@ def _run_synthesis_phase(
                         )
                 selected_letter = arbitration_selected or _fallback_option_from_signals(
                     question=stem_question,
-                    allowed_labels=allowed_labels,
+                    allowed_labels=eligible_labels,
                     answer_choices=answer_choices,
                     option_dossiers=option_dossiers,
                     blended_scores=blended_scores,
                     lexical_scores=lexical_scores,
                 )
-                if not selected_letter:
-                    # Last-resort deterministic tie-break without alphabetical bias.
-                    selected_letter = _deterministic_tiebreak_option(stem_question, sorted(answer_choices.keys())) or "A"
-                draft = f"<answer>{selected_letter}</answer>"
-                draft_texts = [draft]
-                _record_gen_usage(provider_plan.synthesis, provider_plan.synthesis, draft)
+                draft = ""
+                if selected_letter:
+                    draft = f"<answer>{selected_letter}</answer>"
+                    draft_texts = [draft]
+                    _record_gen_usage(provider_plan.synthesis, provider_plan.synthesis, draft)
+                else:
+                    draft_texts = ["<answer>UNKNOWN</answer>"]
+                    _record_gen_usage(provider_plan.synthesis, provider_plan.synthesis, draft_texts[0])
                 stages.append(
                     TraceStage(
                         name="mcq_format_fallback",
@@ -1671,6 +1725,9 @@ def _run_synthesis_phase(
                             "arbitration_enabled": arbitration_enabled,
                             "arbitration_used": bool(arbitration_selected),
                             "allowed_labels": allowed_labels,
+                            "eligible_labels": eligible_labels,
+                            "eligibility_details": eligibility_details,
+                            "unknown_emitted": selected_letter is None,
                         },
                     )
                 )
@@ -2197,6 +2254,22 @@ def _finalize_answer_and_quality_gates(
         penalty = _env_float("SPARKIT_MCQ_EVIDENCE_GATE_CONF_PENALTY", 0.20, minimum=0.0)
         answer_conf = max(0.05, answer_conf - penalty)
         uncertainty_reasons.append("Selected MCQ option lacks strong supporting passages")
+        if _question_has_answer_choices(context.question) and _env_bool("SPARKIT_MCQ_HARD_BLOCK_ON_WEAK_EVIDENCE", True):
+            final_text = "<answer>UNKNOWN</answer>"
+            stages.append(
+                TraceStage(
+                    name="mcq_hard_block",
+                    status=Status.COMPLETED,
+                    model="policy",
+                    started_at=datetime.now(timezone.utc),
+                    ended_at=datetime.now(timezone.utc),
+                    artifacts={
+                        "applied": True,
+                        "reason": "evidence_gate_failed",
+                        "selected_option_pre_block": mcq_gate_artifacts.get("selected_option"),
+                    },
+                )
+            )
     stages.append(
         TraceStage(
             name="mcq_evidence_gate",
@@ -2678,6 +2751,24 @@ def _build_round_queries(question: str) -> list[tuple[str, list[str]]]:
     ]
 
 
+def _build_citation_traversal_queries(
+    *,
+    records: list[LiteratureRecord],
+    max_items: int = 6,
+) -> list[str]:
+    queries: list[str] = []
+    for record in records[:6]:
+        title = " ".join((record.title or "").split()).strip()
+        if record.doi:
+            queries.append(f"{record.doi} cited by")
+            queries.append(f"{record.doi} follow-up study")
+        if title:
+            clipped = title[:180]
+            queries.append(f"\"{clipped}\" cited by")
+            queries.append(f"\"{clipped}\" replication")
+    return _dedupe_queries(queries, max_items=max_items)
+
+
 def _dedupe_queries(queries: list[str], max_items: int = 8) -> list[str]:
     def _normalize_query_text(query: str, max_terms: int = 18) -> str:
         text = " ".join(query.replace("\n", " ").split())
@@ -2824,12 +2915,69 @@ def _select_confident_blended_option(
     return top_label
 
 
+def _eligible_mcq_labels(
+    *,
+    answer_choices: dict[str, str],
+    allowed_labels: list[str],
+    option_dossiers: dict[str, dict[str, object]] | None,
+    option_scores: dict[str, dict[str, float]] | None,
+    blended_scores: dict[str, dict[str, float]] | None,
+) -> tuple[list[str], dict[str, dict[str, float | int | bool]]]:
+    min_support = _env_int("SPARKIT_MCQ_ELIGIBILITY_MIN_SUPPORT_SNIPPETS", 2, minimum=0)
+    min_dossier = _env_float("SPARKIT_MCQ_ELIGIBILITY_MIN_DOSSIER_SCORE", 1.8, minimum=0.0)
+    min_net = _env_float("SPARKIT_MCQ_ELIGIBILITY_MIN_NET_SCORE", 0.0, minimum=-1.0)
+    min_blended = _env_float("SPARKIT_MCQ_ELIGIBILITY_MIN_BLENDED_SCORE", 0.0, minimum=-1.0)
+    strict_enabled = _env_bool("SPARKIT_ENABLE_MCQ_STRICT_ELIGIBILITY", True)
+
+    labels = [label for label in sorted(answer_choices.keys()) if label in set(allowed_labels)]
+    if not labels:
+        labels = sorted(answer_choices.keys())
+
+    details: dict[str, dict[str, float | int | bool]] = {}
+    eligible: list[str] = []
+    for label in labels:
+        dossier_row = (option_dossiers or {}).get(label, {})
+        score_row = (option_scores or {}).get(label, {})
+        blend_row = (blended_scores or {}).get(label, {})
+        support_count = len((dossier_row.get("support_snippets") or [])) if isinstance(dossier_row, dict) else 0
+        dossier_score = float((dossier_row.get("dossier_score", 0.0) if isinstance(dossier_row, dict) else 0.0) or 0.0)
+        net_score = float((score_row.get("net", 0.0) if isinstance(score_row, dict) else 0.0) or 0.0)
+        blended_score = float((blend_row.get("blended", 0.0) if isinstance(blend_row, dict) else 0.0) or 0.0)
+        passed = (
+            (support_count >= min_support)
+            and (dossier_score >= min_dossier)
+            and (net_score >= min_net)
+            and (blended_score >= min_blended)
+        )
+        details[label] = {
+            "support_snippets": support_count,
+            "dossier_score": dossier_score,
+            "net_score": net_score,
+            "blended_score": blended_score,
+            "eligible": passed,
+        }
+        if passed or not strict_enabled:
+            eligible.append(label)
+
+    return eligible, details
+
+
 def _deterministic_tiebreak_option(question: str, labels: list[str]) -> str | None:
     if not labels:
         return None
     seed = abs(hash(question or ""))
     idx = seed % len(labels)
     return sorted(labels)[idx]
+
+
+def _deterministic_label_order(question: str, labels: list[str]) -> list[str]:
+    ordered = sorted(labels)
+    if len(ordered) <= 1:
+        return ordered
+    shift = abs(hash((question or "") + "::label_order")) % len(ordered)
+    if shift == 0:
+        shift = 1
+    return ordered[shift:] + ordered[:shift]
 
 
 def _fallback_option_from_signals(
@@ -3385,6 +3533,67 @@ def _semantic_rerank_records(
             seen.add(rid)
             if len(ranked) >= top_k:
                 break
+    return ranked
+
+
+def _rcs_rerank_records(
+    question: str,
+    records: list[LiteratureRecord],
+    provider: str,
+    top_k: int,
+) -> list[LiteratureRecord]:
+    # PaperQA-inspired RCS pass: question-conditioned summaries + direct answerability scoring.
+    if not records:
+        return []
+    capped = records[: max(1, min(len(records), _env_int("SPARKIT_RCS_RERANK_CANDIDATES", 20, minimum=4)))]
+    lines = []
+    for idx, rec in enumerate(capped, start=1):
+        abstract = " ".join((rec.abstract or "").split())
+        if len(abstract) > 420:
+            abstract = abstract[:420] + "..."
+        lines.append(f"{idx}. {rec.title} | {abstract}")
+    prompt = (
+        "You are ranking papers for question answering.\n"
+        "For each candidate, estimate how directly it can answer the question.\n"
+        "Return one line per paper in this exact format:\n"
+        "1: score=0.00\n"
+        "2: score=0.00\n"
+        "...\n"
+        "Use scores between 0 and 1. No extra text.\n\n"
+        f"Question: {question}\n\n"
+        "Papers:\n"
+        + "\n".join(lines)
+    )
+    result = generate_text(provider, prompt, max_tokens=260)
+    if not result.success or not result.text.strip():
+        return capped[:top_k]
+
+    parsed_scores: dict[int, float] = {}
+    for raw_line in result.text.splitlines():
+        match = re.search(r"^\s*(\d+)\s*:\s*score\s*=\s*([01](?:\.\d+)?)\s*$", raw_line.strip(), flags=re.IGNORECASE)
+        if not match:
+            continue
+        idx = int(match.group(1))
+        score = max(0.0, min(1.0, float(match.group(2))))
+        if 1 <= idx <= len(capped):
+            parsed_scores[idx] = score
+    if not parsed_scores:
+        return capped[:top_k]
+
+    ranked_idxs = sorted(parsed_scores.keys(), key=lambda idx: (parsed_scores[idx], idx), reverse=True)
+    ranked: list[LiteratureRecord] = []
+    seen: set[int] = set()
+    for idx in ranked_idxs:
+        ranked.append(capped[idx - 1])
+        seen.add(idx)
+        if len(ranked) >= top_k:
+            return ranked
+    for idx, rec in enumerate(capped, start=1):
+        if idx in seen:
+            continue
+        ranked.append(rec)
+        if len(ranked) >= top_k:
+            break
     return ranked
 
 
@@ -4181,7 +4390,8 @@ def _build_mcq_option_judge_prompt(
     option_evidence_packs: dict[str, object] | None = None,
 ) -> str:
     stem, _ = _split_question_and_choices(question)
-    choices_block = "\n".join(f"{label}. {text}" for label, text in sorted(answer_choices.items()))
+    label_order = _deterministic_label_order(stem, sorted(answer_choices.keys()))
+    choices_block = "\n".join(f"{label}. {answer_choices.get(label, '')}" for label in label_order)
     evidence_lines = "\n".join(f"- {claim}" for claim in claim_texts[:12]) or "- No evidence lines available."
     cluster_lines = "\n".join(
         f"- {cluster['label']} (n={cluster['count']}): {'; '.join(cluster['sample_claims'])}"
@@ -4191,7 +4401,8 @@ def _build_mcq_option_judge_prompt(
         f"- {row['section']}: {row['summary']}" for row in (section_summaries or [])[:4]
     ) or "- No section summaries available."
     option_pack_lines: list[str] = []
-    for label, text in sorted(answer_choices.items()):
+    for label in label_order:
+        text = answer_choices.get(label, "")
         pack = (option_evidence_packs or {}).get(label, [])
         support = " | ".join((pack.get("support_snippets", []) if isinstance(pack, dict) else pack)[:3]) if pack else "no support snippets"
         counter = " | ".join((pack.get("counter_snippets", []) if isinstance(pack, dict) else [])[:2]) if isinstance(pack, dict) else ""
@@ -4202,6 +4413,7 @@ def _build_mcq_option_judge_prompt(
         "You are a rigorous STEM MCQ adjudicator.\n"
         f"Domain guidance: {domain_hint}\n"
         "Use only the provided evidence to choose the best option.\n"
+        "Do not assume earlier letter labels are more likely; labels may be permuted.\n"
         "If evidence is weak, still pick the most supported option.\n"
         "Return ONLY one XML tag.\n"
         "Format exactly: <answer>X</answer>\n\n"
@@ -4228,7 +4440,8 @@ def _build_mcq_option_scoring_prompt(
     option_evidence_packs: dict[str, object] | None = None,
 ) -> str:
     stem, _ = _split_question_and_choices(question)
-    choices_block = "\n".join(f"{label}. {text}" for label, text in sorted(answer_choices.items()))
+    label_order = _deterministic_label_order(stem, sorted(answer_choices.keys()))
+    choices_block = "\n".join(f"{label}. {answer_choices.get(label, '')}" for label in label_order)
     evidence_lines = "\n".join(f"- {claim}" for claim in claim_texts[:12]) or "- No evidence lines available."
     cluster_lines = "\n".join(
         f"- {cluster['label']} (n={cluster['count']}): {'; '.join(cluster['sample_claims'])}"
@@ -4238,7 +4451,8 @@ def _build_mcq_option_scoring_prompt(
         f"- {row['section']}: {row['summary']}" for row in (section_summaries or [])[:4]
     ) or "- No section summaries available."
     option_pack_lines: list[str] = []
-    for label, text in sorted(answer_choices.items()):
+    for label in label_order:
+        text = answer_choices.get(label, "")
         pack = (option_evidence_packs or {}).get(label, [])
         support = " | ".join((pack.get("support_snippets", []) if isinstance(pack, dict) else pack)[:3]) if pack else "no support snippets"
         counter = " | ".join((pack.get("counter_snippets", []) if isinstance(pack, dict) else [])[:2]) if isinstance(pack, dict) else ""
@@ -4248,6 +4462,7 @@ def _build_mcq_option_scoring_prompt(
     return (
         "You are a strict STEM MCQ evidence scorer.\n"
         f"Domain guidance: {domain_hint}\n"
+        "Do not apply letter-position priors (A/B-first bias); score only evidence support and contradiction.\n"
         "For each choice, score how well evidence supports it and contradicts it.\n"
         "Use only the evidence below.\n"
         "Output exactly one line per choice in this format:\n"
@@ -4280,6 +4495,7 @@ def _build_mcq_arbitration_prompt(
 ) -> str:
     stem, _ = _split_question_and_choices(question)
     labels = [label for label in sorted(answer_choices.keys()) if label in set(allowed_labels)] or sorted(answer_choices.keys())
+    labels = _deterministic_label_order(stem, labels)
     choices_block = "\n".join(f"{label}. {answer_choices.get(label,'')}" for label in labels)
     lines: list[str] = []
     for label in labels:
@@ -4317,10 +4533,12 @@ def _build_mcq_option_elimination_prompt(
     option_dossiers: dict[str, object] | None = None,
 ) -> str:
     stem, _ = _split_question_and_choices(question)
-    choices_block = "\n".join(f"{label}. {text}" for label, text in sorted(answer_choices.items()))
+    label_order = _deterministic_label_order(stem, sorted(answer_choices.keys()))
+    choices_block = "\n".join(f"{label}. {answer_choices.get(label, '')}" for label in label_order)
     evidence_lines = "\n".join(f"- {claim}" for claim in claim_texts[:12]) or "- No evidence lines available."
     dossier_lines: list[str] = []
-    for label, text in sorted(answer_choices.items()):
+    for label in label_order:
+        text = answer_choices.get(label, "")
         row = (option_dossiers or {}).get(label, {})
         if isinstance(row, dict):
             support = " | ".join((row.get("support_snippets") or [])[:2]) or "none"
@@ -4329,6 +4547,7 @@ def _build_mcq_option_elimination_prompt(
     dossier_block = "\n".join(dossier_lines) or "- No option dossiers available."
     return (
         "You are a strict STEM MCQ eliminator.\n"
+        "Do not infer correctness from letter order.\n"
         "Mark each option as KEEP or ELIMINATE based only on evidence.\n"
         "If uncertain, prefer KEEP over ELIMINATE.\n"
         "Return exactly one line per option in this format:\n"

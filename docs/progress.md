@@ -1,6 +1,6 @@
 # Progress Tracker
 
-Last updated: 2026-02-25
+Last updated: 2026-02-26
 
 ## Project status
 - Overall phase: Advanced pipeline implementation
@@ -31,6 +31,15 @@ Last updated: 2026-02-25
 - None.
 
 ## Recent updates
+- 2026-02-26: Implemented anti-collapse MCQ policy + observability:
+  - Added strict MCQ option eligibility gate before scorer/judge/arbitration selection (`SPARKIT_ENABLE_MCQ_STRICT_ELIGIBILITY` + threshold knobs).
+  - Removed forced deterministic letter fallback when MCQ output is unparseable; format fallback now emits `<answer>UNKNOWN</answer>` when no eligible option exists.
+  - Added finalization hard block (`SPARKIT_MCQ_HARD_BLOCK_ON_WEAK_EVIDENCE`) to replace weak-evidence MCQ answers with `<answer>UNKNOWN</answer>`.
+  - Added per-question `mcq_decision` provenance to benchmark predictions for scorer/judge/fallback/rescue/hard-block diagnostics.
+- 2026-02-26: Incorporated PaperQA-inspired retrieval patterns:
+  - Added question-conditioned candidate scoring rerank pass (`SPARKIT_ENABLE_RCS_RERANK`).
+  - Added citation-traversal query injection loop (`SPARKIT_ENABLE_CITATION_TRAVERSAL_QUERIES`) to pull follow-up/replication evidence from retrieved paper titles/DOIs.
+  - Added deterministic MCQ label permutation + anti-letter-prior instructions in scorer/judge/elimination/arbitration prompts.
 - 2026-02-26: Hardened MCQ fallback/selection robustness:
   - Replaced heuristic parse fallback with strict arbitration fallback (`SPARKIT_ENABLE_MCQ_ARBITRATION_FALLBACK`) and non-alphabetical deterministic tie-break.
   - Added `mcq_parse_failure` trace stage for scorer/judge/arbitration parse diagnostics.

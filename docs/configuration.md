@@ -84,6 +84,13 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `SPARKIT_MCQ_EVIDENCE_GATE_CONF_PENALTY` (default: `0.20`; confidence penalty if gate fails at finalization)
 - `SPARKIT_ENABLE_MCQ_DUAL_SCORER` (default: `1`; runs a second adversarial MCQ scorer pass and blends both score sets)
 - `SPARKIT_ENABLE_MCQ_ARBITRATION_FALLBACK` (default: `1`; when MCQ scorer/judge output is unparseable, run a strict arbitration call instead of heuristic defaulting)
+- `SPARKIT_ENABLE_MCQ_STRICT_ELIGIBILITY` (default: `1`; only options meeting support/dossier/net/blended thresholds are eligible for selection)
+- `SPARKIT_MCQ_ELIGIBILITY_MIN_SUPPORT_SNIPPETS` (default: `2`)
+- `SPARKIT_MCQ_ELIGIBILITY_MIN_DOSSIER_SCORE` (default: `1.8`)
+- `SPARKIT_MCQ_ELIGIBILITY_MIN_NET_SCORE` (default: `0.0`)
+- `SPARKIT_MCQ_ELIGIBILITY_MIN_BLENDED_SCORE` (default: `0.0`)
+- `SPARKIT_MCQ_HARD_BLOCK_ON_WEAK_EVIDENCE` (default: `1`; if final MCQ evidence gate fails, emit `<answer>UNKNOWN</answer>` instead of forcing a low-evidence letter)
+- MCQ option prompts now use deterministic label permutation + explicit anti-letter-prior guidance to reduce A/B positional bias.
 - `SPARKIT_ENABLE_CLAIM_GAP_LOOP` (default: `1`; injects claim-gap follow-up queries from each completed retrieval round into the next round)
 - `SPARKIT_CLAIM_GAP_MAX_QUERIES` (default: `4`; max injected claim-gap queries per stage)
 - `SPARKIT_CLAIM_GAP_MAX_NEXT_QUERIES` (default: `12`; max merged query count for next stage after gap injection)
@@ -164,6 +171,13 @@ Set these provider keys in the runtime environment (do not hardcode):
 - Latency policy note: default `max_latency_s` is unset (`null`), so no latency cap is applied unless explicitly set.
 - Direct-call quality note: empty parsed answers are now counted as failures (`empty_answer_text`).
 - Benchmark manifest includes MCQ collapse detection fields per config (`mcq_letter_distribution`, `mcq_dominant_ratio`, `mcq_collapse_warning`), with threshold controlled by `SPARKIT_MCQ_COLLAPSE_THRESHOLD` (default `0.70`).
+- Per-question benchmark predictions now include `mcq_decision` provenance (selected-via scorer/judge/fallback/rescue/hard-block, gate pass/fail, parse-failure sources).
+- PaperQA-inspired retrieval controls:
+  - `SPARKIT_ENABLE_RCS_RERANK` (default: `1`; question-conditioned relevance scoring over candidates before optional semantic rerank)
+  - `SPARKIT_RCS_RERANK_CANDIDATES` (default: `20`)
+  - `SPARKIT_ENABLE_CITATION_TRAVERSAL_QUERIES` (default: `1`; inject citation/follow-up queries from retrieved papers into the next round)
+  - `SPARKIT_CITATION_TRAVERSAL_MAX_QUERIES` (default: `4`)
+  - `SPARKIT_CITATION_TRAVERSAL_MAX_NEXT_QUERIES` (default: `14`)
 - DeepSeek direct-call note: when DeepSeek returns empty `message.content` but populated `reasoning_content`, provider adapter falls back to reasoning text to avoid false hard-failures.
 - Timeout note: tuned provider defaults are Grok `60s`, DeepSeek `45s`, and `35s` for other providers unless overridden by env vars.
 - Kimi response note: Kimi responses with empty `message.content` are treated as failures to avoid silently accepting reasoning-only outputs.

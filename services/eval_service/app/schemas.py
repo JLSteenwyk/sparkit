@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -21,6 +23,7 @@ class Prediction(BaseModel):
     answer_text: str
     answer_confidence: float = Field(ge=0.0, le=1.0)
     citation_count: int = 0
+    mcq_decision: dict[str, Any] | None = None
 
 
 class RubricScore(BaseModel):

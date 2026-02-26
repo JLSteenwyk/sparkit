@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
 from typing import Any
 
 from fastapi import HTTPException
@@ -15,6 +16,86 @@ from shared.schemas.domain import Constraints, Mode
 from .evaluator import evaluate, load_questions
 from .schemas import Prediction
 from .usage_summary import summarize_usage
+
+
+def _extract_answer_letter(text: str) -> str | None:
+    match = re.search(r"<answer>\s*([A-N])\s*</answer>", text or "", flags=re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    return None
+
+
+def _extract_mcq_provenance(trace_payload: dict[str, Any], answer_text: str) -> dict[str, Any] | None:
+    stages = trace_payload.get("stages") or []
+    if not isinstance(stages, list):
+        return None
+    selected = _extract_answer_letter(answer_text or "")
+
+    scorer = None
+    judge = None
+    fallback = None
+    rescue = None
+    gate_final = None
+    parse_failures: list[dict[str, str]] = []
+    hard_block = None
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        name = stage.get("name")
+        artifacts = stage.get("artifacts") or {}
+        if not isinstance(artifacts, dict):
+            artifacts = {}
+        if name == "mcq_option_scorer":
+            scorer = artifacts
+        elif name == "mcq_option_judge":
+            judge = artifacts
+        elif name == "mcq_format_fallback":
+            fallback = artifacts
+        elif name == "mcq_option_rescue":
+            rescue = artifacts
+        elif name == "mcq_parse_failure":
+            parse_failures.append(
+                {
+                    "source": str(artifacts.get("source", "")),
+                    "reason": str(artifacts.get("reason", "")),
+                }
+            )
+        elif name == "mcq_evidence_gate" and artifacts.get("phase") == "finalization":
+            gate_final = artifacts
+        elif name == "mcq_hard_block":
+            hard_block = artifacts
+
+    is_mcq = any(
+        isinstance(stage, dict) and str(stage.get("name", "")).startswith("mcq_")
+        for stage in stages
+    )
+    if not is_mcq:
+        return None
+
+    provenance_source = "unknown"
+    if hard_block:
+        provenance_source = "hard_block"
+    elif rescue and rescue.get("rescue_applied"):
+        provenance_source = "rescue_override"
+    elif fallback:
+        provenance_source = "format_fallback"
+    elif judge:
+        provenance_source = "judge"
+    elif scorer:
+        provenance_source = "scorer"
+
+    return {
+        "selected_option": selected,
+        "selected_via": provenance_source,
+        "eligible_labels": (scorer or {}).get("eligible_labels"),
+        "allowed_labels": (scorer or {}).get("allowed_labels"),
+        "evidence_gate_passed": bool((gate_final or {}).get("passed", False)),
+        "evidence_gate_reason": (gate_final or {}).get("reason"),
+        "rescue_applied": bool((rescue or {}).get("rescue_applied", False)),
+        "fallback_used": bool(fallback),
+        "hard_block_applied": bool(hard_block),
+        "parse_failures": parse_failures,
+    }
 
 
 def _summarize_usage(usage_rows: list[dict[str, float | int]]) -> dict[str, float | int]:
@@ -151,6 +232,7 @@ def _run_question(
         answer_text=answer_text,
         answer_confidence=answer.get("answer_confidence", 0.0),
         citation_count=len(citations),
+        mcq_decision=_extract_mcq_provenance(trace_payload, answer_text),
     )
     failure_reason: str | None = None
     if run_status != "completed":
