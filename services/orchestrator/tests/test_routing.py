@@ -12,6 +12,24 @@ def test_single_mode_uses_requested_provider() -> None:
     assert plan.synthesis == "openai"
 
 
+def test_option_graph_v2_mode_uses_single_provider_plan() -> None:
+    statuses = [ProviderStatus(provider="openai", configured=True, env_var="OPENAI_API_KEY")]
+    plan = build_provider_plan(mode="option_graph_v2", statuses=statuses, requested=["openai"])
+    assert plan.planning == "openai"
+    assert plan.retrieval == "openai"
+    assert plan.synthesis == "openai"
+    assert plan.verification == "openai"
+
+
+def test_simple_rag_mode_uses_single_provider_plan() -> None:
+    statuses = [ProviderStatus(provider="openai", configured=True, env_var="OPENAI_API_KEY")]
+    plan = build_provider_plan(mode="simple_rag", statuses=statuses, requested=["openai"])
+    assert plan.planning == "openai"
+    assert plan.retrieval == "openai"
+    assert plan.synthesis == "openai"
+    assert plan.verification == "openai"
+
+
 def test_routed_mode_prefers_specialized_providers() -> None:
     statuses = [
         ProviderStatus(provider="anthropic", configured=True, env_var="ANTHROPIC_API_KEY"),

@@ -9,9 +9,11 @@ from pydantic import BaseModel, Field
 
 class Mode(str, Enum):
     SINGLE = "single"
+    SIMPLE_RAG = "simple_rag"
     ROUTED = "routed"
     RESEARCH_MAX = "research_max"
     ENSEMBLE = "ensemble"
+    OPTION_GRAPH_V2 = "option_graph_v2"
 
 
 class Status(str, Enum):

@@ -12,7 +12,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="SPARKIT benchmark and calibration evaluator")
     parser.add_argument("--questions", default="benchmarks/stem_exam_200_sample/questions.json")
     parser.add_argument("--predictions", default="")
-    parser.add_argument("--mode", default="single", choices=["single", "routed", "ensemble"])
+    parser.add_argument(
+        "--mode",
+        default="single",
+        choices=["single", "simple_rag", "routed", "ensemble", "option_graph_v2"],
+    )
     parser.add_argument("--providers", default="openai")
     parser.add_argument("--max-questions", type=int, default=0)
     parser.add_argument("--save-predictions", default="")

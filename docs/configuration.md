@@ -1,6 +1,6 @@
 # Configuration
 
-Last updated: 2026-02-25
+Last updated: 2026-02-26
 
 ## Required environment variables
 Set these provider keys in the runtime environment (do not hardcode):
@@ -95,6 +95,8 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `SPARKIT_MCQ_COVERAGE_MIN_SUPPORT_SOURCES` (default: `1`; minimum independent supporting sources required per MCQ option)
 - `SPARKIT_MCQ_COVERAGE_MAX_OPTIONS` (default: `8`; max option labels enforced by coverage gate on very large-choice MCQs)
 - `SPARKIT_MCQ_COVERAGE_MAX_QUERIES` (default: `18`; cap for option-targeted expansion queries per attempt)
+- `SPARKIT_OPTION_GRAPH_V2_MAX_OPTIONS` (default: `10`; number of options to explicitly include in option-contrast retrieval rounds for `option_graph_v2`)
+- `SPARKIT_SIMPLE_RAG_TOP_CHUNKS` (default: `3`; number of top semantic chunks used for extractive evidence summaries per ingested document in `simple_rag`)
 - MCQ option prompts now use deterministic label permutation + explicit anti-letter-prior guidance to reduce A/B positional bias.
 - `SPARKIT_ENABLE_CLAIM_GAP_LOOP` (default: `1`; injects claim-gap follow-up queries from each completed retrieval round into the next round)
 - `SPARKIT_CLAIM_GAP_MAX_QUERIES` (default: `4`; max injected claim-gap queries per stage)
@@ -122,6 +124,8 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `constraints.synthesis_max_tokens` overrides synthesis token budget per run.
 - Current mode defaults when unset:
   - `single_*` / `routed`: synthesis max tokens is uncapped (`null`), retrieval minimum `max(min_sources+8,14)`, ingestion target docs `max(min_sources+6,10)`
+  - `simple_rag`: synthesis max tokens uncapped (`null`), retrieval rounds are simplified to primary + support, and ingestion uses semantic chunk matching + extractive summaries
+  - `option_graph_v2`: synthesis max tokens uncapped (`null`), with additional option-support/option-contrast retrieval rounds before standard gap-fill/adversarial rounds
   - `research_max`: synthesis max tokens uncapped (`null`), retrieval minimum `max(min_sources+12,18)`, ingestion target docs `max(min_sources+8,14)`
   - `ensemble`: synthesis max tokens uncapped (`null`) per draft
 - Adaptive retrieval continuation:

@@ -29,11 +29,15 @@ from services.orchestrator.app.engine import (
     _question_has_answer_choices,
     _record_relevance_score,
     _record_source_quality_score,
+    _top_semantic_chunks,
+    _run_synthesis_phase,
     _question_domain,
     _domain_mcq_guidance,
     _mcq_option_coverage_report,
     _build_option_coverage_queries,
     _render_structured_claim_lines,
+    _structured_option_score_matrix,
+    _select_from_structured_matrix,
     _select_confident_blended_option,
     _select_best_section_chunk,
     _select_option_from_dossiers,
@@ -41,6 +45,7 @@ from services.orchestrator.app.engine import (
     _split_question_and_choices,
     _apply_mcq_option_rescue,
 )
+from services.orchestrator.app.routing import ProviderPlan
 from shared.schemas.domain import Status, TraceStage
 from datetime import datetime, timezone
 from services.retrieval_service.app.models import LiteratureRecord
@@ -178,6 +183,52 @@ def test_retrieval_plan_builds_intent_queries() -> None:
     assert rounds[0][0] == "retrieval_round_1"
 
 
+def test_option_graph_v2_rounds_include_option_support_and_contrast() -> None:
+    question = (
+        "Which pathway best explains the phenotype?\n\n"
+        "Answer Choices:\n"
+        "A. pathway alpha\n"
+        "B. pathway beta\n"
+        "C. pathway gamma\n"
+    )
+    plan = _heuristic_retrieval_plan(question)
+    rounds = _build_round_queries_from_plan(mode="option_graph_v2", question=question, plan=plan)
+    names = [name for name, _ in rounds]
+    assert "retrieval_round_option_support" in names
+    assert "retrieval_round_option_contrast" in names
+    assert "retrieval_round_4_falsification" in names
+
+
+def test_simple_rag_rounds_are_minimal_supportive() -> None:
+    question = (
+        "Which pathway best explains the phenotype?\n\n"
+        "Answer Choices:\n"
+        "A. pathway alpha\n"
+        "B. pathway beta\n"
+    )
+    plan = _heuristic_retrieval_plan(question)
+    rounds = _build_round_queries_from_plan(mode="simple_rag", question=question, plan=plan)
+    names = [name for name, _ in rounds]
+    assert names == ["retrieval_round_1", "retrieval_round_2_support"]
+
+
+def test_top_semantic_chunks_prefers_mechanistic_chunk() -> None:
+    sections = [
+        ("intro", "General background about biology and historical context."),
+        ("results", "Mechanistic evidence shows kinase B phosphorylates substrate C under hypoxia."),
+        ("discussion", "Potential confounders and unresolved limitations."),
+    ]
+    top = _top_semantic_chunks(
+        question="Which mechanism explains phosphorylation of substrate C under hypoxia?",
+        sections=sections,
+        focus_terms=["phosphorylation", "substrate C", "hypoxia", "kinase"],
+        top_k=2,
+    )
+    assert top
+    assert top[0][0] == "results"
+    assert "phosphorylates substrate c" in top[0][1].lower()
+
+
 def test_select_best_section_chunk_prefers_focus_term_overlap() -> None:
     sections = [
         ("intro", "This paper provides broad context on chemistry history and theory."),
@@ -297,6 +348,78 @@ def test_render_structured_claim_lines_serializes_claims() -> None:
     assert lines
     assert "supports=C" in lines[0]
     assert "contradicts=A,B" in lines[0]
+
+
+def test_structured_option_score_matrix_and_selection() -> None:
+    claims = [
+        StructuredClaim(
+            source_title="Paper A",
+            source_year=2024,
+            claim_text="Supports A",
+            supports=["A"],
+            contradicts=["B"],
+            confidence=0.9,
+        ),
+        StructuredClaim(
+            source_title="Paper B",
+            source_year=2023,
+            claim_text="Supports A weakly",
+            supports=["A"],
+            contradicts=[],
+            confidence=0.5,
+        ),
+    ]
+    matrix = _structured_option_score_matrix(answer_choices={"A": "alpha", "B": "beta"}, structured_claims=claims)
+    assert float(matrix["A"]["score"]) > float(matrix["B"]["score"])
+    selected, artifact = _select_from_structured_matrix(matrix, eligible_labels=["A", "B"])
+    assert selected == "A"
+    assert artifact["reason"] == "selected"
+
+
+def test_option_graph_v2_mcq_synthesis_uses_matrix_without_llm_calls(monkeypatch) -> None:
+    def _unexpected_generate_text(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("generate_text should not be called for option_graph_v2 MCQ synthesis")
+
+    monkeypatch.setattr("services.orchestrator.app.engine.generate_text", _unexpected_generate_text)
+
+    result = _run_synthesis_phase(
+        started=datetime.now(timezone.utc),
+        mode="option_graph_v2",
+        max_latency_s=None,
+        max_cost_usd=100.0,
+        spent_usd=0.0,
+        provider_plan=ProviderPlan(
+            planning="openai",
+            retrieval="openai",
+            synthesis="openai",
+            verification="openai",
+            ensemble=["openai"],
+        ),
+        question="Which option is correct?\n\nAnswer Choices:\nA. alpha\nB. beta",
+        stem_question="Which option is correct?",
+        answer_choices={"A": "alpha", "B": "beta"},
+        claim_texts=[],
+        structured_claims=[
+            StructuredClaim(
+                source_title="Paper A",
+                source_year=2024,
+                claim_text="Supports alpha.",
+                supports=["A"],
+                contradicts=["B"],
+                confidence=0.9,
+            )
+        ],
+        unsupported_claims=0,
+        claim_clusters=[],
+        section_summaries=[],
+        synthesis_prompt="unused",
+        synthesis_token_budget=None,
+        research_plan=None,
+        stages=[],
+        difficulty_profile="hard",
+    )
+
+    assert result.draft_texts == ["<answer>A</answer>"]
 
 
 def test_parse_mcq_option_scores_extracts_numeric_rows() -> None:

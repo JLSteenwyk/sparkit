@@ -31,6 +31,40 @@ Last updated: 2026-02-26
 - None.
 
 ## Recent updates
+- 2026-02-26: Added simplified retrieval pipeline mode `simple_rag`:
+  - New orchestration mode contract: `retrieve -> semantic chunk match -> extractive summary -> answer`.
+  - Added mode wiring in schema/CLI/routing (`Mode.SIMPLE_RAG`, `scripts_run_eval.py` choices, single-provider provider plan behavior).
+  - Added simplified retrieval rounds for this mode (`retrieval_round_1`, `retrieval_round_2_support`) in planner.
+  - Upgraded evidence assembly with semantic chunk selection across parsed sections (`_top_semantic_chunks`, `_semantic_chunk_score`) and multi-chunk extractive summary construction.
+  - Disabled MCQ hard-block-to-`UNKNOWN` specifically for `simple_rag` finalization path to force answer selection for direct comparability.
+  - Added tests:
+    - `services/orchestrator/tests/test_routing.py` (`simple_rag` provider plan)
+    - `services/orchestrator/tests/test_synthesis_quality.py` (simple rounds + semantic chunk ranking)
+    - `services/api_gateway/tests/test_ask_request_validation.py` (`simple_rag` provider validation)
+- 2026-02-26: Refactored MCQ synthesis flow to reduce legacy overlap during V2 rollout:
+  - Removed redundant/unreachable `option_graph_v2` checks from legacy scorer/judge path in `services/orchestrator/app/engine.py`.
+  - Added regression test `test_option_graph_v2_mcq_synthesis_uses_matrix_without_llm_calls` to enforce deterministic matrix-first MCQ synthesis behavior for V2 (no LLM scorer call dependency).
+  - Updated V2 roadmap to mark deterministic matrix-only MCQ decision as complete for `option_graph_v2`.
+- 2026-02-26: Added `option_graph_v2` mode shell for safe parallel development:
+  - Added `Mode.OPTION_GRAPH_V2` in schema and provider requirements in `AskRequest`.
+  - Wired provider routing to treat `option_graph_v2` as single-provider plan initially.
+  - Wired synthesis mode branch handling so `option_graph_v2` executes full synthesis path (no dead branch).
+  - Added trace stage `option_graph_v2_mode` in orchestration runs.
+  - Added tests:
+    - `services/orchestrator/tests/test_routing.py` (`option_graph_v2` provider plan behavior)
+    - `services/api_gateway/tests/test_ask_request_validation.py` (provider requirement validation)
+  - Updated CLI benchmark script mode choices to include `option_graph_v2`.
+- 2026-02-26: Added initial option-centric retrieval planner for `option_graph_v2`:
+  - New retrieval rounds: `retrieval_round_option_support` and `retrieval_round_option_contrast` ahead of gap-fill/adversarial/falsification rounds.
+  - Added round-construction test in `services/orchestrator/tests/test_synthesis_quality.py`.
+- 2026-02-26: Added deterministic structured-evidence scoring for `option_graph_v2`:
+  - Implemented structured option score matrix from extracted claims (`support_sum`, `contradiction_sum`, source counts, weighted score).
+  - `option_graph_v2` now attempts matrix-based option selection before dossier/blended LLM scoring.
+  - Added matrix scoring/selection tests in `services/orchestrator/tests/test_synthesis_quality.py`.
+- 2026-02-26: Prepared full V2 migration scaffolding docs:
+  - Added `docs/v2-roadmap.md` with phased implementation plan, acceptance gates, and immediate sprint sequence.
+  - Added `docs/v2-freeze-baseline.md` with pinned baseline runs/metrics for direct vs SPARKIT comparisons.
+  - Added `docs/v2-legacy-removal-plan.md` with post-acceptance cleanup/deprecation checklist.
 - 2026-02-26: Implemented retrieval/synthesis quality upgrades without answer fallbacks:
   - Added structured MCQ claim extraction during evidence assembly (`supports` / `contradicts` / confidence per claim).
   - Added pre-synthesis MCQ evidence-quality gate that measures per-option support coverage and triggers targeted retrieval expansion rounds when coverage is weak.

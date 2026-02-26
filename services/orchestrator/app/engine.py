@@ -1057,18 +1057,39 @@ def _assemble_evidence_and_build_claims(
         claim_text = f"{record.title} ({record.year or 'n.d.'}) indicates relevant evidence for the question."
         section_name = "abstract"
         section_text = record.abstract or ""
+        semantic_chunks_used: list[tuple[str, str, float]] = []
         try:
             ingested = fetch_and_parse(record.url, max_chars=ingestion_max_chars, timeout_s=12.0)
             if ingested.sections:
                 parsed_sections = [(section.heading, section.text) for section in ingested.sections if section.text.strip()]
-                section_name, section_text = _select_best_section_chunk(
+                semantic_chunks_used = _top_semantic_chunks(
                     question=question,
                     sections=parsed_sections,
                     focus_terms=retrieval_plan.focus_terms if retrieval_plan else [],
+                    top_k=_env_int("SPARKIT_SIMPLE_RAG_TOP_CHUNKS", 3, minimum=1),
                 )
+                if semantic_chunks_used:
+                    section_name = semantic_chunks_used[0][0]
+                    section_text = "\n".join(chunk for _, chunk, _ in semantic_chunks_used)
+                else:
+                    section_name, section_text = _select_best_section_chunk(
+                        question=question,
+                        sections=parsed_sections,
+                        focus_terms=retrieval_plan.focus_terms if retrieval_plan else [],
+                    )
         except Exception:  # noqa: BLE001
             pass
-        summary = _first_sentence(section_text, max_chars=180)
+        summary_parts: list[str] = []
+        if semantic_chunks_used:
+            for _, chunk, _ in semantic_chunks_used[:2]:
+                sent = _first_sentence(chunk, max_chars=180)
+                if sent:
+                    summary_parts.append(sent)
+        if not summary_parts:
+            fallback_sent = _first_sentence(section_text, max_chars=180)
+            if fallback_sent:
+                summary_parts.append(fallback_sent)
+        summary = " ".join(summary_parts).strip()
         if summary:
             claim_text = f"{record.title} ({record.year or 'n.d.'}) reports: {summary}"
 
@@ -1337,7 +1358,7 @@ def _run_synthesis_phase(
                     section_summaries=section_summaries,
                 )
             )
-    elif mode in {Mode.SINGLE.value, Mode.ROUTED.value}:
+    elif mode in {Mode.SINGLE.value, Mode.SIMPLE_RAG.value, Mode.ROUTED.value, Mode.OPTION_GRAPH_V2.value}:
         hard_parallel_enabled = _env_bool("SPARKIT_ENABLE_HARD_PARALLEL_CANDIDATES", True)
         if difficulty_profile == "hard" and hard_parallel_enabled and not (_question_has_answer_choices(question) and answer_choices):
             variant_count = _env_int("SPARKIT_HARD_PARALLEL_CANDIDATES", 3, minimum=2)
@@ -1428,6 +1449,129 @@ def _run_synthesis_phase(
                 ensemble_agreement=ensemble_agreement,
             )
         if _question_has_answer_choices(question) and answer_choices:
+            if mode == Mode.OPTION_GRAPH_V2.value:
+                option_evidence_packs = _build_option_evidence_packs(
+                    stem=stem_question,
+                    answer_choices=answer_choices,
+                    claim_texts=combined_claim_texts,
+                    top_k=4,
+                )
+                option_dossiers = _build_option_dossiers(
+                    stem=stem_question,
+                    answer_choices=answer_choices,
+                    claim_texts=combined_claim_texts,
+                    section_summaries=section_summaries,
+                    top_k=4,
+                )
+                structured_matrix = _structured_option_score_matrix(
+                    answer_choices=answer_choices,
+                    structured_claims=structured_claims,
+                )
+                max_support_sum = max(
+                    [0.0, *[float((structured_matrix.get(label) or {}).get("support_sum", 0.0)) for label in answer_choices]]
+                )
+                max_contradiction_sum = max(
+                    [0.0, *[float((structured_matrix.get(label) or {}).get("contradiction_sum", 0.0)) for label in answer_choices]]
+                )
+                parsed_scores: dict[str, dict[str, float]] = {}
+                for label in sorted(answer_choices.keys()):
+                    row = structured_matrix.get(label, {})
+                    support_sum = float((row.get("support_sum", 0.0) if isinstance(row, dict) else 0.0) or 0.0)
+                    contradiction_sum = float(
+                        (row.get("contradiction_sum", 0.0) if isinstance(row, dict) else 0.0) or 0.0
+                    )
+                    support = (support_sum / max_support_sum) if max_support_sum > 0 else 0.0
+                    contradiction = (contradiction_sum / max_contradiction_sum) if max_contradiction_sum > 0 else 0.0
+                    parsed_scores[label] = {
+                        "support": max(0.0, min(1.0, support)),
+                        "contradiction": max(0.0, min(1.0, contradiction)),
+                        "net": max(-1.0, min(1.0, support - contradiction)),
+                    }
+                secondary_scores: dict[str, dict[str, float]] = {}
+                lexical_scores = _mcq_lexical_option_scores(
+                    answer_choices=answer_choices,
+                    claim_texts=combined_claim_texts,
+                    section_summaries=section_summaries,
+                )
+                dossier_scores = {
+                    label: float(
+                        (option_dossiers.get(label, {}) if isinstance(option_dossiers.get(label, {}), dict) else {}).get(
+                            "dossier_score", 0.0
+                        )
+                    )
+                    for label in sorted(answer_choices.keys())
+                }
+                max_dossier = max([0.0, *dossier_scores.values()])
+                blended_scores: dict[str, dict[str, float]] = {}
+                for label in sorted(answer_choices.keys()):
+                    llm = parsed_scores.get(label, {"support": 0.0, "contradiction": 0.0, "net": 0.0})
+                    lex = lexical_scores.get(label, {"lexical": 0.0})
+                    dossier_norm = (dossier_scores.get(label, 0.0) / max(1e-9, max_dossier)) if max_dossier > 0 else 0.0
+                    llm_net = float(llm["net"])
+                    blended = (0.55 * llm_net) + (0.25 * float(lex["lexical"])) + (0.20 * dossier_norm)
+                    blended_scores[label] = {
+                        "support": float(llm["support"]),
+                        "contradiction": float(llm["contradiction"]),
+                        "net": float(llm["net"]),
+                        "secondary_net": 0.0,
+                        "lexical": float(lex["lexical"]),
+                        "dossier_score": dossier_scores.get(label, 0.0),
+                        "dossier_norm": dossier_norm,
+                        "blended": blended,
+                    }
+                allowed_labels = sorted(answer_choices.keys())
+                eligible_labels, eligibility_details = _eligible_mcq_labels(
+                    answer_choices=answer_choices,
+                    allowed_labels=allowed_labels,
+                    option_dossiers=option_dossiers,
+                    option_scores=parsed_scores,
+                    blended_scores=blended_scores,
+                )
+                matrix_eligibility_relaxed = False
+                if not eligible_labels:
+                    eligible_labels = allowed_labels
+                    matrix_eligibility_relaxed = True
+                selected_letter, structured_artifact = _select_from_structured_matrix(
+                    structured_matrix,
+                    eligible_labels=eligible_labels,
+                )
+                if selected_letter:
+                    draft = f"<answer>{selected_letter}</answer>"
+                    draft_texts = [draft]
+                    _record_gen_usage(provider_plan.synthesis, provider_plan.synthesis, draft)
+                else:
+                    draft_texts = ["<answer>UNKNOWN</answer>"]
+                    synthesis_failures.append(f"{provider_plan.synthesis}: option_graph_v2_matrix_no_selection")
+                    _record_gen_usage(provider_plan.synthesis, provider_plan.synthesis, draft_texts[0])
+                stages.append(
+                    TraceStage(
+                        name="mcq_option_matrix_decider",
+                        status=Status.COMPLETED,
+                        model="policy",
+                        started_at=datetime.now(timezone.utc),
+                        ended_at=datetime.now(timezone.utc),
+                        artifacts={
+                            "selected_option": selected_letter,
+                            "allowed_labels": allowed_labels,
+                            "eligible_labels": eligible_labels,
+                            "eligibility_details": eligibility_details,
+                            "matrix_eligibility_relaxed": matrix_eligibility_relaxed,
+                            "structured_matrix": structured_matrix,
+                            "structured_selection_artifact": structured_artifact,
+                            "option_evidence_packs": option_evidence_packs,
+                            "option_dossiers": option_dossiers,
+                            "unknown_emitted": selected_letter is None,
+                            "mode": Mode.OPTION_GRAPH_V2.value,
+                        },
+                    )
+                )
+                return SynthesisExecutionResult(
+                    spent_usd=spent_usd,
+                    synthesis_failures=synthesis_failures,
+                    draft_texts=draft_texts,
+                    draft_usage=draft_usage,
+                    ensemble_agreement=ensemble_agreement,
+                )
             option_evidence_packs = _build_option_evidence_packs(
                 stem=stem_question,
                 answer_choices=answer_choices,
@@ -1558,19 +1702,26 @@ def _run_synthesis_phase(
                 blended_scores=blended_scores,
             )
             selected_letter: str | None = None
+            structured_matrix = _structured_option_score_matrix(
+                answer_choices=answer_choices,
+                structured_claims=structured_claims,
+            )
+            structured_selected: str | None = None
+            structured_artifact: dict[str, object] = {}
             dossier_pool = {label: row for label, row in option_dossiers.items() if label in eligible_labels}
             blended_pool = {label: row for label, row in blended_scores.items() if label in eligible_labels}
             dossier_selected = _select_option_from_dossiers(dossier_pool)
-            if dossier_selected and dossier_selected in answer_choices:
-                selected_letter = dossier_selected
-            if blended_pool and len({round(row["blended"], 6) for row in blended_pool.values()}) > 1:
-                min_margin = float(os.getenv("SPARKIT_MCQ_BLEND_MARGIN", "0.06"))
-                min_top_score = float(os.getenv("SPARKIT_MCQ_BLEND_MIN_TOP", "0.02"))
-                selected_letter = _select_confident_blended_option(
-                    blended_scores=blended_pool,
-                    min_margin=min_margin,
-                    min_top_score=min_top_score,
-                )
+            if selected_letter is None:
+                if dossier_selected and dossier_selected in answer_choices:
+                    selected_letter = dossier_selected
+                if blended_pool and len({round(row["blended"], 6) for row in blended_pool.values()}) > 1:
+                    min_margin = float(os.getenv("SPARKIT_MCQ_BLEND_MARGIN", "0.06"))
+                    min_top_score = float(os.getenv("SPARKIT_MCQ_BLEND_MIN_TOP", "0.02"))
+                    selected_letter = _select_confident_blended_option(
+                        blended_scores=blended_pool,
+                        min_margin=min_margin,
+                        min_top_score=min_top_score,
+                    )
 
             if scorer_result.success and selected_letter and selected_letter in answer_choices:
                 draft = f"<answer>{selected_letter}</answer>"
@@ -1597,6 +1748,9 @@ def _run_synthesis_phase(
                             "secondary_option_scores": secondary_scores,
                             "lexical_scores": lexical_scores,
                             "blended_scores": blended_scores,
+                            "structured_matrix": structured_matrix,
+                            "structured_selected": structured_selected,
+                            "structured_selection_artifact": structured_artifact,
                             "allowed_labels": allowed_labels,
                             "eligible_labels": eligible_labels,
                             "eligibility_details": eligibility_details,
@@ -2299,7 +2453,11 @@ def _finalize_answer_and_quality_gates(
         penalty = _env_float("SPARKIT_MCQ_EVIDENCE_GATE_CONF_PENALTY", 0.20, minimum=0.0)
         answer_conf = max(0.05, answer_conf - penalty)
         uncertainty_reasons.append("Selected MCQ option lacks strong supporting passages")
-        if _question_has_answer_choices(context.question) and _env_bool("SPARKIT_MCQ_HARD_BLOCK_ON_WEAK_EVIDENCE", True):
+        if (
+            context.mode != Mode.SIMPLE_RAG.value
+            and _question_has_answer_choices(context.question)
+            and _env_bool("SPARKIT_MCQ_HARD_BLOCK_ON_WEAK_EVIDENCE", True)
+        ):
             final_text = "<answer>UNKNOWN</answer>"
             stages.append(
                 TraceStage(
@@ -3435,6 +3593,72 @@ def _mcq_option_coverage_report(
     }
 
 
+def _structured_option_score_matrix(
+    *,
+    answer_choices: dict[str, str],
+    structured_claims: list[StructuredClaim],
+) -> dict[str, dict[str, float | int]]:
+    matrix: dict[str, dict[str, float | int]] = {}
+    for label in sorted(answer_choices.keys()):
+        support_sum = 0.0
+        contradiction_sum = 0.0
+        support_sources: set[str] = set()
+        contradiction_sources: set[str] = set()
+        for row in structured_claims:
+            if label in set(row.supports):
+                support_sum += float(row.confidence)
+                support_sources.add(row.source_title)
+            if label in set(row.contradicts):
+                contradiction_sum += float(row.confidence)
+                contradiction_sources.add(row.source_title)
+        score = support_sum - (0.70 * contradiction_sum) + (0.15 * min(2, len(support_sources)))
+        matrix[label] = {
+            "support_sum": round(support_sum, 6),
+            "contradiction_sum": round(contradiction_sum, 6),
+            "support_sources": len(support_sources),
+            "contradiction_sources": len(contradiction_sources),
+            "score": round(score, 6),
+        }
+    return matrix
+
+
+def _select_from_structured_matrix(
+    matrix: dict[str, dict[str, float | int]],
+    *,
+    eligible_labels: list[str],
+) -> tuple[str | None, dict[str, object]]:
+    pool = {label: matrix.get(label, {}) for label in eligible_labels if label in matrix}
+    artifact: dict[str, object] = {"pool_labels": sorted(pool.keys()), "selected": None}
+    if not pool:
+        artifact["reason"] = "empty_pool"
+        return None, artifact
+    ranked = sorted(
+        pool.items(),
+        key=lambda kv: (float(kv[1].get("score", 0.0)), float(kv[1].get("support_sum", 0.0))),
+        reverse=True,
+    )
+    top_label, top_row = ranked[0]
+    top_score = float(top_row.get("score", 0.0))
+    runner_score = float(ranked[1][1].get("score", 0.0)) if len(ranked) > 1 else 0.0
+    margin = top_score - runner_score
+    min_top = _env_float("SPARKIT_V2_MATRIX_MIN_TOP_SCORE", 0.30, minimum=0.0)
+    min_margin = _env_float("SPARKIT_V2_MATRIX_MIN_MARGIN", 0.10, minimum=0.0)
+    artifact["top_score"] = top_score
+    artifact["runner_score"] = runner_score
+    artifact["margin"] = margin
+    artifact["min_top"] = min_top
+    artifact["min_margin"] = min_margin
+    if top_score < min_top:
+        artifact["reason"] = "top_below_threshold"
+        return None, artifact
+    if len(ranked) > 1 and margin < min_margin:
+        artifact["reason"] = "margin_below_threshold"
+        return None, artifact
+    artifact["reason"] = "selected"
+    artifact["selected"] = top_label
+    return top_label, artifact
+
+
 def _build_option_coverage_queries(
     *,
     stem: str,
@@ -3874,6 +4098,50 @@ def _chunk_relevance_score(question_tokens: set[str], focus_tokens: set[str], ch
     return (1.4 * question_overlap) + (1.9 * focus_overlap) + min(len(chunk_tokens), 150) / 500.0
 
 
+def _semantic_chunk_score(query_tokens: set[str], chunk: str, boost_tokens: set[str] | None = None) -> float:
+    chunk_tokens = _tokenize(chunk)
+    if not chunk_tokens:
+        return 0.0
+    chunk_set = set(chunk_tokens)
+    overlap = len(chunk_set & query_tokens)
+    if boost_tokens:
+        overlap += int(1.5 * len(chunk_set & boost_tokens))
+    jaccard = overlap / max(1, len(chunk_set | query_tokens))
+    denom = (len(chunk_set) ** 0.5) * (len(query_tokens) ** 0.5)
+    cosine_like = (overlap / denom) if denom > 0 else 0.0
+    return (0.65 * cosine_like) + (0.35 * jaccard)
+
+
+def _top_semantic_chunks(
+    *,
+    question: str,
+    sections: list[tuple[str, str]],
+    focus_terms: list[str],
+    top_k: int = 3,
+) -> list[tuple[str, str, float]]:
+    query_tokens = set(_tokenize(question))
+    boost_tokens = set(_tokenize(" ".join(focus_terms)))
+    scored: list[tuple[float, str, str]] = []
+    for heading, text in sections:
+        for chunk in _chunk_text(text):
+            score = _semantic_chunk_score(query_tokens, chunk, boost_tokens=boost_tokens)
+            if score <= 0.0:
+                continue
+            scored.append((score, heading, chunk))
+    scored.sort(key=lambda row: row[0], reverse=True)
+    picked: list[tuple[str, str, float]] = []
+    seen_chunks: set[str] = set()
+    for score, heading, chunk in scored:
+        key = chunk[:180].lower()
+        if key in seen_chunks:
+            continue
+        seen_chunks.add(key)
+        picked.append((heading, chunk, score))
+        if len(picked) >= top_k:
+            break
+    return picked
+
+
 def _select_best_section_chunk(question: str, sections: list[tuple[str, str]], focus_terms: list[str]) -> tuple[str, str]:
     if not sections:
         return "abstract", ""
@@ -4199,6 +4467,20 @@ def _decompose_retrieval(question: str, planning_provider: str, research_plan: R
 
 def _build_round_queries_from_plan(mode: str, question: str, plan: RetrievalPlan) -> list[tuple[str, list[str]]]:
     primary_queries = _dedupe_queries([*plan.intent_queries["primary"], *plan.intent_queries.get("options", [])], max_items=10)
+    if mode == Mode.SIMPLE_RAG.value:
+        support_queries = _dedupe_queries(
+            [
+                *plan.intent_queries.get("methods", []),
+                *plan.intent_queries.get("reference", []),
+                *plan.intent_queries.get("factcheck", []),
+                *plan.intent_queries.get("options", []),
+            ],
+            max_items=12,
+        )
+        return [
+            ("retrieval_round_1", primary_queries),
+            ("retrieval_round_2_support", support_queries),
+        ]
     if mode == Mode.RESEARCH_MAX.value:
         return [
             ("retrieval_primary", primary_queries),
@@ -4208,6 +4490,34 @@ def _build_round_queries_from_plan(mode: str, question: str, plan: RetrievalPlan
             ("retrieval_adversarial", plan.intent_queries["adversarial"]),
             ("retrieval_reference", plan.intent_queries["reference"]),
         ]
+    if mode == Mode.OPTION_GRAPH_V2.value:
+        option_support_queries = _dedupe_queries(plan.intent_queries.get("options", []), max_items=12)
+        option_contrast_queries = _build_option_coverage_queries(
+            stem=question,
+            answer_choices=plan.answer_choices,
+            missing_labels=sorted(plan.answer_choices.keys())[: _env_int("SPARKIT_OPTION_GRAPH_V2_MAX_OPTIONS", 10, minimum=2)],
+            max_items=16,
+        )
+        rounds = [
+            ("retrieval_round_1", primary_queries),
+            ("retrieval_round_option_support", option_support_queries),
+            ("retrieval_round_option_contrast", option_contrast_queries),
+            ("retrieval_round_factcheck", plan.intent_queries.get("factcheck", [])),
+            ("retrieval_round_2_gap_fill", _dedupe_queries([*plan.intent_queries["methods"], *plan.intent_queries["reference"]], max_items=10)),
+            ("retrieval_round_3_adversarial", plan.intent_queries["adversarial"]),
+        ]
+        rounds.append(
+            (
+                "retrieval_round_4_falsification",
+                _build_falsification_queries(
+                    stem=question,
+                    answer_choices=plan.answer_choices,
+                    segments=plan.segments,
+                    max_items=_env_int("SPARKIT_FALSIFICATION_MAX_QUERIES", 10, minimum=4),
+                ),
+            )
+        )
+        return rounds
     option_queries = _dedupe_queries(plan.intent_queries.get("options", []), max_items=8)
     rounds = [
         ("retrieval_round_1", primary_queries),
@@ -4783,6 +5093,34 @@ def execute_orchestration(
         retrieval_plan=retrieval_plan,
         adaptive=adaptive,
     )
+    if config.mode == Mode.OPTION_GRAPH_V2.value:
+        stages.append(
+            TraceStage(
+                name="option_graph_v2_mode",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "enabled": True,
+                    "contract": "option-centric retrieval + structured-claim evidence + deterministic MCQ selection",
+                },
+            )
+        )
+    if config.mode == Mode.SIMPLE_RAG.value:
+        stages.append(
+            TraceStage(
+                name="simple_rag_mode",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "enabled": True,
+                    "contract": "retrieve -> semantic chunk match -> extractive summary -> answer",
+                },
+            )
+        )
     retrieval_result = _run_retrieval_rounds(
         started=started,
         question=question,
@@ -4887,7 +5225,12 @@ def execute_orchestration(
     base_claim_conf = evidence_result.base_claim_conf
     unsupported_claims = evidence_result.unsupported_claims
 
-    if _question_has_answer_choices(question) and retrieval_plan and retrieval_plan.answer_choices:
+    if (
+        config.mode != Mode.SIMPLE_RAG.value
+        and _question_has_answer_choices(question)
+        and retrieval_plan
+        and retrieval_plan.answer_choices
+    ):
         stem_question, answer_choices = _split_question_and_choices(question)
         coverage_attempts = _env_int("SPARKIT_MCQ_COVERAGE_MAX_ATTEMPTS", 2, minimum=0)
         for coverage_attempt in range(coverage_attempts):

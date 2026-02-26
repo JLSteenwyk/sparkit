@@ -2,7 +2,7 @@
 
 This folder tracks architecture, implementation progress, and session handoff context for the literature fetching and reviewing agent.
 
-Last updated: 2026-02-20
+Last updated: 2026-02-26
 
 ## How to use this folder
 - Start each work session by reading `docs/context.md` and `docs/progress.md`.
@@ -13,6 +13,9 @@ Last updated: 2026-02-20
 
 ## File index
 - `docs/architecture.md`: System architecture and service boundaries.
+- `docs/v2-roadmap.md`: Multi-phase implementation plan for the option-graph V2 workflow.
+- `docs/v2-freeze-baseline.md`: Frozen baseline runs/metrics for V2 A/B acceptance.
+- `docs/v2-legacy-removal-plan.md`: Legacy decommission checklist after V2 passes gates.
 - `docs/api-contracts.md`: Gateway API contract and response shapes.
 - `docs/schemas.md`: Domain schema references and persistence expectations.
 - `docs/progress.md`: Current status, milestones, blockers, and recent updates.

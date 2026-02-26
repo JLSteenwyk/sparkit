@@ -66,7 +66,7 @@ def build_provider_plan(
     configured = _configured(statuses)
     requested_non_empty = requested or ["openai"]
 
-    if mode == "single":
+    if mode in {"single", "simple_rag", "option_graph_v2"}:
         base = _pick(requested_non_empty, configured, requested_non_empty[0])
         return ProviderPlan(
             planning=base,

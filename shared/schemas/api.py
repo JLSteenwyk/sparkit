@@ -21,8 +21,8 @@ class AskRequest(BaseModel):
     def validate_provider_requirements(self) -> "AskRequest":
         if self.mode == Mode.RESEARCH_MAX:
             raise ValueError("mode=research_max is deprecated and no longer supported")
-        if self.mode == Mode.SINGLE and not self.providers:
-            raise ValueError("providers is required when mode=single")
+        if self.mode in {Mode.SINGLE, Mode.SIMPLE_RAG, Mode.OPTION_GRAPH_V2} and not self.providers:
+            raise ValueError("providers is required when mode=single or mode=simple_rag or mode=option_graph_v2")
         return self
 
 
