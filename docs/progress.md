@@ -31,6 +31,11 @@ Last updated: 2026-02-26
 - None.
 
 ## Recent updates
+- 2026-02-26: Implemented retrieval/synthesis quality upgrades without answer fallbacks:
+  - Added structured MCQ claim extraction during evidence assembly (`supports` / `contradicts` / confidence per claim).
+  - Added pre-synthesis MCQ evidence-quality gate that measures per-option support coverage and triggers targeted retrieval expansion rounds when coverage is weak.
+  - Added option-targeted expansion queries (`evidence for/against/mechanism`) and full re-assembly before synthesis.
+  - Synthesis prompts now include structured evidence mappings in addition to plain claim bullets.
 - 2026-02-26: Implemented anti-collapse MCQ policy + observability:
   - Added strict MCQ option eligibility gate before scorer/judge/arbitration selection (`SPARKIT_ENABLE_MCQ_STRICT_ELIGIBILITY` + threshold knobs).
   - Removed forced deterministic letter fallback when MCQ output is unparseable; format fallback now emits `<answer>UNKNOWN</answer>` when no eligible option exists.

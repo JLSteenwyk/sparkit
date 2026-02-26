@@ -98,6 +98,49 @@ def _extract_mcq_provenance(trace_payload: dict[str, Any], answer_text: str) -> 
     }
 
 
+def _extract_mcq_stage_diagnostics(trace_payload: dict[str, Any]) -> dict[str, Any]:
+    stages = trace_payload.get("stages") or []
+    if not isinstance(stages, list):
+        return {}
+    out: dict[str, Any] = {
+        "is_mcq": False,
+        "pre_synthesis_coverage_attempts": 0,
+        "pre_synthesis_coverage_passed": False,
+        "pre_synthesis_missing_labels_initial": 0,
+        "pre_synthesis_missing_labels_final": 0,
+        "coverage_expansion_rounds": 0,
+        "coverage_expansion_queries": 0,
+        "parse_failure_count": 0,
+    }
+    coverage_gate_rows: list[dict[str, Any]] = []
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        name = str(stage.get("name", ""))
+        artifacts = stage.get("artifacts") or {}
+        if not isinstance(artifacts, dict):
+            artifacts = {}
+        if name.startswith("mcq_"):
+            out["is_mcq"] = True
+        if name == "mcq_parse_failure":
+            out["parse_failure_count"] = int(out.get("parse_failure_count", 0)) + 1
+        elif name == "mcq_pre_synthesis_coverage_gate":
+            coverage_gate_rows.append(artifacts)
+        elif name == "retrieval_mcq_coverage_expansion":
+            out["coverage_expansion_rounds"] = int(out.get("coverage_expansion_rounds", 0)) + 1
+            out["coverage_expansion_queries"] = int(out.get("coverage_expansion_queries", 0)) + len(
+                artifacts.get("queries") or []
+            )
+    if coverage_gate_rows:
+        out["pre_synthesis_coverage_attempts"] = len(coverage_gate_rows)
+        first = coverage_gate_rows[0]
+        last = coverage_gate_rows[-1]
+        out["pre_synthesis_coverage_passed"] = bool(last.get("passed", False))
+        out["pre_synthesis_missing_labels_initial"] = len(first.get("missing_labels") or [])
+        out["pre_synthesis_missing_labels_final"] = len(last.get("missing_labels") or [])
+    return out
+
+
 def _summarize_usage(usage_rows: list[dict[str, float | int]]) -> dict[str, float | int]:
     return summarize_usage(
         usage_rows,
@@ -258,6 +301,7 @@ def _run_question(
             "contradiction_flags": int(quality.get("contradiction_flags", 0)),
         },
         "prediction": prediction,
+        "diagnostics": _extract_mcq_stage_diagnostics(trace_payload),
     }
 
 
@@ -280,6 +324,7 @@ def run_benchmark_with_predictions(
     failures: list[dict[str, str]] = []
     quality_gates: list[dict[str, float | int]] = []
     usage_rows: list[dict[str, float | int]] = []
+    diagnostics_rows: list[dict[str, Any]] = []
     provider_list = providers or ["openai"]
     workers = max(1, parallel_workers)
     if workers == 1:
@@ -326,6 +371,7 @@ def run_benchmark_with_predictions(
                 }
             )
         usage_rows.append(dict(row["usage"]))
+        diagnostics_rows.append(dict(row.get("diagnostics") or {}))
         quality_gates.append(dict(row["quality"]))
         predictions.append(row["prediction"])
 
@@ -339,9 +385,37 @@ def run_benchmark_with_predictions(
         "max_contradiction_flags": max((int(item["contradiction_flags"]) for item in quality_gates), default=0),
     }
     usage_summary = _summarize_usage(usage_rows)
+    mcq_rows = [item for item in diagnostics_rows if item.get("is_mcq")]
+    diagnostics_summary = {
+        "mcq_questions": len(mcq_rows),
+        "mcq_unknown_answers": sum(
+            1
+            for pred in predictions
+            if str(pred.answer_text).strip().upper() == "<ANSWER>UNKNOWN</ANSWER>"
+        ),
+        "avg_pre_synthesis_missing_labels_initial": (
+            sum(int(item.get("pre_synthesis_missing_labels_initial", 0)) for item in mcq_rows) / max(1, len(mcq_rows))
+        ),
+        "avg_pre_synthesis_missing_labels_final": (
+            sum(int(item.get("pre_synthesis_missing_labels_final", 0)) for item in mcq_rows) / max(1, len(mcq_rows))
+        ),
+        "pre_synthesis_coverage_pass_rate": (
+            sum(1 for item in mcq_rows if bool(item.get("pre_synthesis_coverage_passed", False))) / max(1, len(mcq_rows))
+        ),
+        "avg_coverage_expansion_rounds": (
+            sum(int(item.get("coverage_expansion_rounds", 0)) for item in mcq_rows) / max(1, len(mcq_rows))
+        ),
+        "avg_coverage_expansion_queries": (
+            sum(int(item.get("coverage_expansion_queries", 0)) for item in mcq_rows) / max(1, len(mcq_rows))
+        ),
+        "avg_parse_failures_per_mcq": (
+            sum(int(item.get("parse_failure_count", 0)) for item in mcq_rows) / max(1, len(mcq_rows))
+        ),
+    }
     report_dict = report.model_dump(mode="json")
     report_dict["quality_summary"] = quality_summary
     report_dict["usage_summary"] = usage_summary
+    report_dict["diagnostics_summary"] = diagnostics_summary
     report_dict["orchestrated_run"] = {
         "failures": failures,
         "failure_count": len(failures),
@@ -353,4 +427,5 @@ def run_benchmark_with_predictions(
         "failures": failures,
         "quality_summary": quality_summary,
         "usage_summary": usage_summary,
+        "diagnostics_summary": diagnostics_summary,
     }

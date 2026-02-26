@@ -90,6 +90,11 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `SPARKIT_MCQ_ELIGIBILITY_MIN_NET_SCORE` (default: `0.0`)
 - `SPARKIT_MCQ_ELIGIBILITY_MIN_BLENDED_SCORE` (default: `0.0`)
 - `SPARKIT_MCQ_HARD_BLOCK_ON_WEAK_EVIDENCE` (default: `1`; if final MCQ evidence gate fails, emit `<answer>UNKNOWN</answer>` instead of forcing a low-evidence letter)
+- `SPARKIT_MCQ_COVERAGE_MAX_ATTEMPTS` (default: `2`; pre-synthesis retrieval expansion rounds to satisfy option coverage)
+- `SPARKIT_MCQ_COVERAGE_MIN_SUPPORT_CLAIMS` (default: `1`; minimum structured support claims required per MCQ option)
+- `SPARKIT_MCQ_COVERAGE_MIN_SUPPORT_SOURCES` (default: `1`; minimum independent supporting sources required per MCQ option)
+- `SPARKIT_MCQ_COVERAGE_MAX_OPTIONS` (default: `8`; max option labels enforced by coverage gate on very large-choice MCQs)
+- `SPARKIT_MCQ_COVERAGE_MAX_QUERIES` (default: `18`; cap for option-targeted expansion queries per attempt)
 - MCQ option prompts now use deterministic label permutation + explicit anti-letter-prior guidance to reduce A/B positional bias.
 - `SPARKIT_ENABLE_CLAIM_GAP_LOOP` (default: `1`; injects claim-gap follow-up queries from each completed retrieval round into the next round)
 - `SPARKIT_CLAIM_GAP_MAX_QUERIES` (default: `4`; max injected claim-gap queries per stage)

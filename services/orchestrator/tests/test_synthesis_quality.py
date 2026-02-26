@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from services.orchestrator.app.engine import (
     ClaimEvidence,
+    StructuredClaim,
     _avg_relevance,
     _abstain_reasons,
     _anchor_coverage,
@@ -30,6 +31,9 @@ from services.orchestrator.app.engine import (
     _record_source_quality_score,
     _question_domain,
     _domain_mcq_guidance,
+    _mcq_option_coverage_report,
+    _build_option_coverage_queries,
+    _render_structured_claim_lines,
     _select_confident_blended_option,
     _select_best_section_chunk,
     _select_option_from_dossiers,
@@ -243,6 +247,56 @@ def test_mcq_option_judge_prompt_contains_choices_and_evidence() -> None:
     assert "B. down" in prompt
     assert "Evidence:" in prompt
     assert "Domain guidance:" in prompt
+
+
+def test_mcq_option_coverage_report_detects_missing_labels() -> None:
+    claims = [
+        StructuredClaim(
+            source_title="Paper A",
+            source_year=2024,
+            claim_text="Evidence supports option A only.",
+            supports=["A"],
+            contradicts=["B"],
+            confidence=0.8,
+        )
+    ]
+    report = _mcq_option_coverage_report(
+        answer_choices={"A": "alpha", "B": "beta"},
+        structured_claims=claims,
+    )
+    assert report["passed"] is False
+    assert "B" in report["missing_labels"]
+
+
+def test_build_option_coverage_queries_targets_missing_options() -> None:
+    queries = _build_option_coverage_queries(
+        stem="Which mechanism is correct?",
+        answer_choices={"A": "pathway one", "B": "pathway two"},
+        missing_labels=["B"],
+        max_items=10,
+    )
+    joined = " ".join(queries).lower()
+    assert "pathway two" in joined
+    assert "evidence against" in joined
+
+
+def test_render_structured_claim_lines_serializes_claims() -> None:
+    lines = _render_structured_claim_lines(
+        [
+            StructuredClaim(
+                source_title="Paper X",
+                source_year=2023,
+                claim_text="Claim text",
+                supports=["C"],
+                contradicts=["A", "B"],
+                confidence=0.72,
+            )
+        ],
+        max_items=5,
+    )
+    assert lines
+    assert "supports=C" in lines[0]
+    assert "contradicts=A,B" in lines[0]
 
 
 def test_parse_mcq_option_scores_extracts_numeric_rows() -> None:

@@ -126,6 +126,16 @@ class ClaimEvidence:
 
 
 @dataclass(frozen=True)
+class StructuredClaim:
+    source_title: str
+    source_year: int | None
+    claim_text: str
+    supports: list[str]
+    contradicts: list[str]
+    confidence: float
+
+
+@dataclass(frozen=True)
 class EffortProfile:
     name: str
     rounds: list[tuple[str, list[str]]]
@@ -222,6 +232,7 @@ class EvidenceAssemblyResult:
     citations: list[Citation]
     claim_texts: list[str]
     claim_evidence: list[ClaimEvidence]
+    structured_claims: list[StructuredClaim]
     base_claim_conf: dict[str, float]
     unsupported_claims: int
 
@@ -259,6 +270,7 @@ class EvidenceState:
     citations: list[Citation]
     claim_texts: list[str]
     claim_evidence: list[ClaimEvidence]
+    structured_claims: list[StructuredClaim]
     base_claim_conf: dict[str, float]
     unsupported_claims: int
     claim_clusters: list[dict[str, object]]
@@ -1035,8 +1047,11 @@ def _assemble_evidence_and_build_claims(
     citations: list[Citation] = []
     claim_texts: list[str] = []
     claim_evidence: list[ClaimEvidence] = []
+    structured_claims: list[StructuredClaim] = []
     base_claim_conf: dict[str, float] = {}
     unsupported_claims = 0
+    stem, answer_choices = _split_question_and_choices(question)
+    choice_tokens = {label: set(_tokenize(text)) for label, text in answer_choices.items()}
 
     for record in selected_records:
         claim_text = f"{record.title} ({record.year or 'n.d.'}) indicates relevant evidence for the question."
@@ -1085,12 +1100,40 @@ def _assemble_evidence_and_build_claims(
                 section_text=section_text,
             )
         )
+        if answer_choices:
+            signal_text = f"{claim_text} {section_text}"
+            signal_tokens = set(_tokenize(signal_text))
+            support_scored: list[tuple[float, str]] = []
+            for label, tokens in sorted(choice_tokens.items()):
+                if not tokens:
+                    continue
+                overlap = len(tokens & signal_tokens)
+                if overlap <= 0:
+                    continue
+                norm = overlap / max(1, len(tokens))
+                support_scored.append((norm, label))
+            support_scored.sort(key=lambda item: item[0], reverse=True)
+            supports = [label for score, label in support_scored if score >= 0.20][:2]
+            if not supports and support_scored:
+                supports = [support_scored[0][1]]
+            contradicts = [label for label in sorted(answer_choices.keys()) if label not in set(supports)]
+            structured_claims.append(
+                StructuredClaim(
+                    source_title=record.title,
+                    source_year=record.year,
+                    claim_text=claim_text,
+                    supports=supports,
+                    contradicts=contradicts[:3],
+                    confidence=min(0.95, 0.35 + (support_scored[0][0] if support_scored else 0.0)),
+                )
+            )
 
     return EvidenceAssemblyResult(
         spent_usd=spent_usd,
         citations=citations,
         claim_texts=claim_texts,
         claim_evidence=claim_evidence,
+        structured_claims=structured_claims,
         base_claim_conf=base_claim_conf,
         unsupported_claims=unsupported_claims,
     )
@@ -1208,6 +1251,7 @@ def _run_synthesis_phase(
     stem_question: str,
     answer_choices: dict[str, str],
     claim_texts: list[str],
+    structured_claims: list[StructuredClaim],
     unsupported_claims: int,
     claim_clusters: list[dict[str, object]],
     section_summaries: list[dict[str, str]],
@@ -1221,6 +1265,7 @@ def _run_synthesis_phase(
     draft_texts: list[str] = []
     draft_usage: list[ProviderUsage] = []
     ensemble_agreement = 1.0
+    combined_claim_texts = [*claim_texts, *_render_structured_claim_lines(structured_claims, max_items=8)]
 
     def _record_gen_usage(
         provider: str,
@@ -1255,7 +1300,7 @@ def _run_synthesis_phase(
         if _question_has_answer_choices(question) and answer_choices:
             lexical_scores = _mcq_lexical_option_scores(
                 answer_choices=answer_choices,
-                claim_texts=claim_texts,
+                claim_texts=combined_claim_texts,
                 section_summaries=section_summaries,
             )
             selected_letter = (
@@ -1286,7 +1331,7 @@ def _run_synthesis_phase(
             draft_texts.append(
                 _build_answer_text(
                     question,
-                    claim_texts,
+                    combined_claim_texts,
                     unsupported_claims,
                     clusters=claim_clusters,
                     section_summaries=section_summaries,
@@ -1351,7 +1396,7 @@ def _run_synthesis_phase(
             else:
                 fallback = _build_answer_text(
                     question,
-                    claim_texts,
+                    combined_claim_texts,
                     unsupported_claims,
                     clusters=claim_clusters,
                     section_summaries=section_summaries,
@@ -1386,20 +1431,20 @@ def _run_synthesis_phase(
             option_evidence_packs = _build_option_evidence_packs(
                 stem=stem_question,
                 answer_choices=answer_choices,
-                claim_texts=claim_texts,
+                claim_texts=combined_claim_texts,
                 top_k=4,
             )
             option_dossiers = _build_option_dossiers(
                 stem=stem_question,
                 answer_choices=answer_choices,
-                claim_texts=claim_texts,
+                claim_texts=combined_claim_texts,
                 section_summaries=section_summaries,
                 top_k=4,
             )
             elimination_prompt = _build_mcq_option_elimination_prompt(
                 question=stem_question,
                 answer_choices=answer_choices,
-                claim_texts=claim_texts,
+                claim_texts=combined_claim_texts,
                 option_dossiers=option_dossiers,
             )
             elimination_result = generate_text(
@@ -1416,7 +1461,7 @@ def _run_synthesis_phase(
             scorer_prompt = _build_mcq_option_scoring_prompt(
                 question=stem_question,
                 answer_choices=answer_choices,
-                claim_texts=claim_texts,
+                claim_texts=combined_claim_texts,
                 claim_clusters=claim_clusters,
                 section_summaries=section_summaries,
                 option_evidence_packs=option_dossiers,
@@ -1473,7 +1518,7 @@ def _run_synthesis_phase(
                     )
             lexical_scores = _mcq_lexical_option_scores(
                 answer_choices=answer_choices,
-                claim_texts=claim_texts,
+                claim_texts=combined_claim_texts,
                 section_summaries=section_summaries,
             )
             dossier_scores = {
@@ -1572,7 +1617,7 @@ def _run_synthesis_phase(
                 judge_prompt = _build_mcq_option_judge_prompt(
                     question=stem_question,
                     answer_choices=answer_choices,
-                    claim_texts=claim_texts,
+                    claim_texts=combined_claim_texts,
                     claim_clusters=claim_clusters,
                     section_summaries=section_summaries,
                     option_evidence_packs=option_dossiers,
@@ -1645,7 +1690,7 @@ def _run_synthesis_phase(
                         synthesis_failures.append(f"{provider_plan.synthesis}: {synth_result.error or 'empty output'}")
                         fallback = _build_answer_text(
                             question,
-                            claim_texts,
+                            combined_claim_texts,
                             unsupported_claims,
                             clusters=claim_clusters,
                             section_summaries=section_summaries,
@@ -1748,7 +1793,7 @@ def _run_synthesis_phase(
                 synthesis_failures.append(f"{provider_plan.synthesis}: {synth_result.error or 'empty output'}")
                 fallback = _build_answer_text(
                     question,
-                    claim_texts,
+                    combined_claim_texts,
                     unsupported_claims,
                     clusters=claim_clusters,
                     section_summaries=section_summaries,
@@ -1784,10 +1829,10 @@ def _run_synthesis_phase(
         draft_b = solver_b.text.strip() if solver_b.success and solver_b.text.strip() else ""
         if not draft_a:
             synthesis_failures.append(f"{solver_a_provider}: {solver_a.error or 'empty output'}")
-            draft_a = _build_answer_text(question, claim_texts, unsupported_claims, claim_clusters, section_summaries)
+            draft_a = _build_answer_text(question, combined_claim_texts, unsupported_claims, claim_clusters, section_summaries)
         if not draft_b:
             synthesis_failures.append(f"{solver_b_provider}: {solver_b.error or 'empty output'}")
-            draft_b = _build_answer_text(question, claim_texts, unsupported_claims, claim_clusters, section_summaries)
+            draft_b = _build_answer_text(question, combined_claim_texts, unsupported_claims, claim_clusters, section_summaries)
 
         _record_gen_usage(
             solver_a_provider,
@@ -1888,7 +1933,7 @@ def _run_synthesis_phase(
                 synthesis_failures.append(f"{provider}: {result.error or 'empty output'}")
                 draft = (
                     f"[{provider}] "
-                    f"{_build_answer_text(question, claim_texts, unsupported_claims, claim_clusters, section_summaries)}"
+                    f"{_build_answer_text(question, combined_claim_texts, unsupported_claims, claim_clusters, section_summaries)}"
                 )
             drafts.append(draft)
             _record_gen_usage(
@@ -1907,7 +1952,7 @@ def _run_synthesis_phase(
             draft_texts = [
                 _build_answer_text(
                     question,
-                    claim_texts,
+                    combined_claim_texts,
                     unsupported_claims,
                     clusters=claim_clusters,
                     section_summaries=section_summaries,
@@ -3331,6 +3376,83 @@ def _build_option_hypothesis_queries(stem: str, answer_choices: dict[str, str], 
     return _dedupe_queries(queries, max_items=max_items)
 
 
+def _render_structured_claim_lines(
+    structured_claims: list[StructuredClaim],
+    max_items: int = 10,
+) -> list[str]:
+    lines: list[str] = []
+    for row in structured_claims[:max_items]:
+        supports = ",".join(row.supports) if row.supports else "none"
+        contradicts = ",".join(row.contradicts) if row.contradicts else "none"
+        lines.append(
+            f"[{row.source_title}] supports={supports}; contradicts={contradicts}; "
+            f"confidence={row.confidence:.2f}; claim={row.claim_text}"
+        )
+    return lines
+
+
+def _mcq_option_coverage_report(
+    *,
+    answer_choices: dict[str, str],
+    structured_claims: list[StructuredClaim],
+) -> dict[str, object]:
+    per_option: dict[str, dict[str, object]] = {}
+    for label in sorted(answer_choices.keys()):
+        support_claims = 0
+        support_sources: set[str] = set()
+        contradiction_claims = 0
+        for row in structured_claims:
+            if label in set(row.supports):
+                support_claims += 1
+                support_sources.add(row.source_title)
+            if label in set(row.contradicts):
+                contradiction_claims += 1
+        per_option[label] = {
+            "support_claims": support_claims,
+            "support_sources": len(support_sources),
+            "contradiction_claims": contradiction_claims,
+        }
+
+    min_support_claims = _env_int("SPARKIT_MCQ_COVERAGE_MIN_SUPPORT_CLAIMS", 1, minimum=0)
+    min_support_sources = _env_int("SPARKIT_MCQ_COVERAGE_MIN_SUPPORT_SOURCES", 1, minimum=0)
+    labels_to_require = sorted(answer_choices.keys())
+    max_options = _env_int("SPARKIT_MCQ_COVERAGE_MAX_OPTIONS", 8, minimum=1)
+    if len(labels_to_require) > max_options:
+        labels_to_require = labels_to_require[:max_options]
+    missing_labels = [
+        label
+        for label in labels_to_require
+        if int((per_option.get(label) or {}).get("support_claims", 0)) < min_support_claims
+        or int((per_option.get(label) or {}).get("support_sources", 0)) < min_support_sources
+    ]
+    return {
+        "passed": len(missing_labels) == 0,
+        "missing_labels": missing_labels,
+        "required_labels": labels_to_require,
+        "min_support_claims": min_support_claims,
+        "min_support_sources": min_support_sources,
+        "per_option": per_option,
+    }
+
+
+def _build_option_coverage_queries(
+    *,
+    stem: str,
+    answer_choices: dict[str, str],
+    missing_labels: list[str],
+    max_items: int = 16,
+) -> list[str]:
+    queries: list[str] = []
+    for label in missing_labels:
+        choice = (answer_choices.get(label) or "").strip()
+        if not choice:
+            continue
+        queries.append(f"{stem} evidence for {choice}")
+        queries.append(f"{stem} evidence against {choice}")
+        queries.append(f"{stem} mechanism {choice}")
+    return _dedupe_queries(queries, max_items=max_items)
+
+
 def _candidate_option_labels_for_falsification(
     stem: str,
     answer_choices: dict[str, str],
@@ -4333,10 +4455,14 @@ def _build_answer_text(
 def _build_synthesis_prompt(
     question: str,
     claim_texts: list[str],
+    structured_claims: list[StructuredClaim] | None = None,
     claim_clusters: list[dict[str, object]] | None = None,
     section_summaries: list[dict[str, str]] | None = None,
 ) -> str:
     evidence_lines = "\n".join(f"- {claim}" for claim in claim_texts[:8]) or "- No evidence lines available."
+    structured_lines = "\n".join(
+        f"- {line}" for line in _render_structured_claim_lines(structured_claims or [], max_items=10)
+    ) or "- No structured claim mappings available."
     cluster_lines = "\n".join(
         f"- {cluster['label']} (n={cluster['count']}): {'; '.join(cluster['sample_claims'])}"
         for cluster in (claim_clusters or [])[:4]
@@ -4360,6 +4486,8 @@ def _build_synthesis_prompt(
             f"{cluster_lines}\n"
             "Section-aware summaries:\n"
             f"{section_lines}\n"
+            "Structured evidence mappings:\n"
+            f"{structured_lines}\n"
             "Evidence:\n"
             f"{evidence_lines}\n"
             "Return ONLY one XML tag with the final multiple-choice letter.\n"
@@ -4375,6 +4503,8 @@ def _build_synthesis_prompt(
         f"{cluster_lines}\n"
         "Section-aware summaries:\n"
         f"{section_lines}\n"
+        "Structured evidence mappings:\n"
+        f"{structured_lines}\n"
         "Evidence:\n"
         f"{evidence_lines}\n"
         "Return a concise technical answer with: key findings, methods/results caveats, and confidence caveats."
@@ -4753,8 +4883,143 @@ def execute_orchestration(
     citations = evidence_result.citations
     claim_texts = evidence_result.claim_texts
     claim_evidence = evidence_result.claim_evidence
+    structured_claims = evidence_result.structured_claims
     base_claim_conf = evidence_result.base_claim_conf
     unsupported_claims = evidence_result.unsupported_claims
+
+    if _question_has_answer_choices(question) and retrieval_plan and retrieval_plan.answer_choices:
+        stem_question, answer_choices = _split_question_and_choices(question)
+        coverage_attempts = _env_int("SPARKIT_MCQ_COVERAGE_MAX_ATTEMPTS", 2, minimum=0)
+        for coverage_attempt in range(coverage_attempts):
+            coverage = _mcq_option_coverage_report(
+                answer_choices=answer_choices,
+                structured_claims=structured_claims,
+            )
+            stages.append(
+                TraceStage(
+                    name="mcq_pre_synthesis_coverage_gate",
+                    status=Status.COMPLETED,
+                    model="policy",
+                    started_at=datetime.now(timezone.utc),
+                    ended_at=datetime.now(timezone.utc),
+                    artifacts={
+                        "attempt": coverage_attempt + 1,
+                        **coverage,
+                    },
+                )
+            )
+            if bool(coverage.get("passed", False)):
+                break
+            missing_labels = [str(item) for item in (coverage.get("missing_labels") or [])]
+            if not missing_labels:
+                break
+            coverage_queries = _build_option_coverage_queries(
+                stem=stem_question,
+                answer_choices=answer_choices,
+                missing_labels=missing_labels,
+                max_items=_env_int("SPARKIT_MCQ_COVERAGE_MAX_QUERIES", 18, minimum=4),
+            )
+            if not coverage_queries:
+                break
+            cov_start = datetime.now(timezone.utc)
+            cov_records: list[LiteratureRecord] = []
+            cov_errors: dict[str, str] = {}
+            cov_brave_requests = 0
+            cov_exa_web_requests = 0
+            cov_exa_answer_requests = 0
+            cov_exa_research_requests = 0
+            cov_exa_content_requests = 0
+            cov_exa_content_pieces = 0
+            for query in coverage_queries:
+                found, errors, stats = search_literature(query, max_results=effort.retrieval_min_results)
+                cov_records.extend(found)
+                for source, err in errors.items():
+                    cov_errors[f"{source}:{query}"] = err
+                requests_by_source = stats.get("requests_by_source") or {}
+                cov_brave_requests += int(requests_by_source.get("brave_web", 0))
+                cov_exa_web_requests += int(requests_by_source.get("exa_web", 0))
+                cov_exa_answer_requests += int(requests_by_source.get("exa_answer", 0))
+                cov_exa_research_requests += int(requests_by_source.get("exa_research", 0))
+                cov_exa_content_requests += int(requests_by_source.get("exa_content", 0))
+                cov_exa_content_pieces += int(stats.get("exa_content_pieces", 0))
+            deduped_cov_records = _dedupe_records(cov_records)
+            records = _dedupe_records([*records, *deduped_cov_records])
+            selected_records = _select_records_for_ingestion(
+                question=question,
+                records=records,
+                target_docs=effort.ingestion_target_docs,
+                boost_terms=retrieval_plan.focus_terms if retrieval_plan else None,
+            )
+            if final_semantic_rerank:
+                selected_records = _semantic_rerank_records(
+                    question=question,
+                    records=selected_records,
+                    provider=provider_plan.retrieval,
+                    top_k=effort.ingestion_target_docs,
+                )
+
+            cov_base_cost = estimate_stage_cost("retrieval", units=len(coverage_queries))
+            cov_brave_cost = estimate_brave_search_cost(cov_brave_requests)
+            cov_exa_cost = estimate_exa_cost(
+                search_requests_1_25=cov_exa_web_requests,
+                content_pieces=cov_exa_content_pieces,
+                answer_requests=cov_exa_answer_requests,
+                research_search_requests=cov_exa_research_requests,
+            )
+            cov_cost = cov_base_cost + cov_brave_cost + cov_exa_cost
+            spent_usd += cov_cost
+            retrieval_base_cost_usd += cov_base_cost
+            retrieval_brave_cost_usd += cov_brave_cost
+            retrieval_exa_cost_usd += cov_exa_cost
+            brave_request_count += cov_brave_requests
+            exa_web_request_count += cov_exa_web_requests
+            exa_answer_request_count += cov_exa_answer_requests
+            exa_research_request_count += cov_exa_research_requests
+            exa_content_request_count += cov_exa_content_requests
+            exa_content_piece_count += cov_exa_content_pieces
+            aggregate_errors.update(cov_errors)
+            observability.add_stage(
+                StageMetric(
+                    name="retrieval_mcq_coverage_expansion",
+                    duration_ms=int((datetime.now(timezone.utc) - cov_start).total_seconds() * 1000),
+                    documents_retrieved=len(deduped_cov_records),
+                    source_errors=len(cov_errors),
+                    estimated_cost_usd=cov_cost,
+                )
+            )
+            stages.append(
+                TraceStage(
+                    name="retrieval_mcq_coverage_expansion",
+                    status=Status.COMPLETED,
+                    model=provider_plan.retrieval,
+                    started_at=cov_start,
+                    ended_at=datetime.now(timezone.utc),
+                    artifacts={
+                        "attempt": coverage_attempt + 1,
+                        "missing_labels": missing_labels,
+                        "queries": coverage_queries,
+                        "documents_retrieved": len(deduped_cov_records),
+                        "source_errors": cov_errors,
+                        "estimated_cost_usd": cov_cost,
+                    },
+                )
+            )
+
+            evidence_result = _assemble_evidence_and_build_claims(
+                run_id=run_id,
+                question=question,
+                selected_records=selected_records,
+                retrieval_plan=retrieval_plan,
+                ingestion_max_chars=ingestion_max_chars,
+                spent_usd=spent_usd,
+            )
+            spent_usd = evidence_result.spent_usd
+            citations = evidence_result.citations
+            claim_texts = evidence_result.claim_texts
+            claim_evidence = evidence_result.claim_evidence
+            structured_claims = evidence_result.structured_claims
+            base_claim_conf = evidence_result.base_claim_conf
+            unsupported_claims = evidence_result.unsupported_claims
 
     adversarial_stage_name = "retrieval_adversarial" if mode == Mode.RESEARCH_MAX.value else "retrieval_round_3_adversarial"
     verifier_records = list(records_by_round.get(adversarial_stage_name, []))
@@ -4855,6 +5120,7 @@ def execute_orchestration(
     synthesis_prompt = _build_synthesis_prompt(
         question,
         claim_texts,
+        structured_claims=structured_claims,
         claim_clusters=claim_clusters,
         section_summaries=section_summaries,
     )
@@ -4871,6 +5137,7 @@ def execute_orchestration(
         stem_question=stem_question,
         answer_choices=answer_choices,
         claim_texts=claim_texts,
+        structured_claims=structured_claims,
         unsupported_claims=unsupported_claims,
         claim_clusters=claim_clusters,
         section_summaries=section_summaries,
@@ -5126,6 +5393,7 @@ def execute_orchestration(
         synthesis_prompt = _build_synthesis_prompt(
             question,
             claim_texts,
+            structured_claims=structured_claims,
             claim_clusters=claim_clusters,
             section_summaries=section_summaries,
         )
@@ -5140,6 +5408,7 @@ def execute_orchestration(
             stem_question=stem_question,
             answer_choices=answer_choices,
             claim_texts=claim_texts,
+            structured_claims=structured_claims,
             unsupported_claims=unsupported_claims,
             claim_clusters=claim_clusters,
             section_summaries=section_summaries,
@@ -5185,6 +5454,7 @@ def execute_orchestration(
         citations=citations,
         claim_texts=claim_texts,
         claim_evidence=claim_evidence,
+        structured_claims=structured_claims,
         base_claim_conf=base_claim_conf,
         unsupported_claims=unsupported_claims,
         claim_clusters=claim_clusters,
