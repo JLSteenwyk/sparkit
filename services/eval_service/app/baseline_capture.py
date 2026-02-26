@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,9 @@ KEY_VARS = {
     "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
 }
 
+_ANSWER_TAG_RE = re.compile(r"<answer>\s*([A-Za-z])\s*</answer>", re.IGNORECASE)
+_LEADING_CHOICE_RE = re.compile(r"^\s*([A-Za-z])(?:[\)\].:\s]|$)")
+
 
 def timestamp_slug() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -72,6 +76,7 @@ def key_status() -> dict[str, bool]:
         "MISTRAL_API_KEY": bool(os.getenv("MISTRAL_API_KEY")),
         "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY")),
         "GOOGLE_API_KEY": bool(os.getenv("GOOGLE_API_KEY")),
+        "EXA_API_KEY": bool(os.getenv("EXA_API_KEY")),
     }
 
 
@@ -142,6 +147,31 @@ def capture_baselines(
         "key_status": key_status(),
         "configs": [],
     }
+
+    question_answer_type: dict[str, str] = {}
+    try:
+        raw_questions = json.loads(Path(questions_path).read_text())
+        for row in raw_questions:
+            qid = str(row.get("id", "")).strip()
+            if not qid:
+                continue
+            answer_type = str(row.get("answer_type", "") or "").strip().lower()
+            if not answer_type:
+                answer_type = str(row.get("type", "") or "").strip().lower()
+            question_answer_type[qid] = answer_type
+    except Exception:
+        question_answer_type = {}
+
+    def _extract_choice(answer_text: str) -> str | None:
+        if not answer_text:
+            return None
+        tagged = _ANSWER_TAG_RE.search(answer_text)
+        if tagged:
+            return tagged.group(1).upper()
+        leading = _LEADING_CHOICE_RE.match(answer_text)
+        if leading:
+            return leading.group(1).upper()
+        return None
 
     def _run_config(config: BaselineConfig) -> dict[str, Any]:
         config_record: dict[str, Any] = {
@@ -214,6 +244,42 @@ def capture_baselines(
                 "token_usage_notes": result.get("usage_summary", {}).get("token_usage_notes", ""),
             }
         )
+
+        # Run-level collapse detector for MCQ answer distribution.
+        # This catches pathological cases where a config emits the same option (e.g., 'A') for most questions.
+        mcq_letters: list[str] = []
+        for pred in result.get("predictions", []):
+            qid = str(pred.get("id", "")).strip()
+            if not qid:
+                continue
+            qtype = question_answer_type.get(qid, "")
+            if qtype not in {"multiplechoice", "multiple_choice", "mcq"}:
+                # For older datasets without explicit type, infer MCQ from XML answer tags.
+                inferred = _extract_choice(str(pred.get("answer_text", "") or ""))
+                if inferred is None:
+                    continue
+                mcq_letters.append(inferred)
+                continue
+            extracted = _extract_choice(str(pred.get("answer_text", "") or ""))
+            if extracted:
+                mcq_letters.append(extracted)
+
+        if mcq_letters:
+            counts: dict[str, int] = {}
+            for letter in mcq_letters:
+                counts[letter] = counts.get(letter, 0) + 1
+            dominant_letter, dominant_count = max(counts.items(), key=lambda item: item[1])
+            dominant_ratio = dominant_count / max(1, len(mcq_letters))
+            threshold = float(os.getenv("SPARKIT_MCQ_COLLAPSE_THRESHOLD", "0.70"))
+            config_record["mcq_letter_distribution"] = counts
+            config_record["mcq_dominant_letter"] = dominant_letter
+            config_record["mcq_dominant_ratio"] = dominant_ratio
+            config_record["mcq_collapse_warning"] = bool(len(mcq_letters) >= 5 and dominant_ratio >= threshold)
+        else:
+            config_record["mcq_letter_distribution"] = {}
+            config_record["mcq_dominant_letter"] = None
+            config_record["mcq_dominant_ratio"] = 0.0
+            config_record["mcq_collapse_warning"] = False
         return config_record
 
     if max(1, parallel_configs) == 1:

@@ -14,9 +14,11 @@ from services.orchestrator.app.engine import (
     _build_round_queries_from_plan,
     _build_section_summaries,
     _build_synthesis_prompt,
+    _evidence_consensus_profile,
     _extract_answer_letter,
     _has_discriminative_option_scores,
     _mcq_lexical_option_scores,
+    _mcq_selected_option_evidence_gate,
     _parse_mcq_option_scores,
     _parse_mcq_option_elimination,
     _extract_lexical_anchors,
@@ -25,6 +27,9 @@ from services.orchestrator.app.engine import (
     _heuristic_retrieval_plan,
     _question_has_answer_choices,
     _record_relevance_score,
+    _record_source_quality_score,
+    _question_domain,
+    _domain_mcq_guidance,
     _select_confident_blended_option,
     _select_best_section_chunk,
     _select_option_from_dossiers,
@@ -138,9 +143,13 @@ def test_abstain_reasons_trigger_on_sparse_low_support_profile() -> None:
         unsupported_claims=3,
         contradiction_flags=4,
         synthesis_failures=["empty output"],
+        independent_hq_sources=1,
+        consensus_score=0.25,
     )
     assert "retrieved_evidence_too_sparse" in reasons
     assert "citation_coverage_below_threshold" in reasons
+    assert "insufficient_independent_high_quality_sources" in reasons
+    assert "evidence_consensus_weak" in reasons
 
 
 def test_answer_choices_detection() -> None:
@@ -161,7 +170,7 @@ def test_retrieval_plan_builds_intent_queries() -> None:
     rounds = _build_round_queries_from_plan(mode="single", question=question, plan=plan)
     assert plan.intent_queries["primary"]
     assert plan.intent_queries["methods"]
-    assert len(rounds) == 4
+    assert len(rounds) >= 4
     assert rounds[0][0] == "retrieval_round_1"
 
 
@@ -217,7 +226,7 @@ def test_heuristic_retrieval_plan_includes_option_queries_for_mcq() -> None:
 
 def test_extract_answer_letter_prefers_xml_tag() -> None:
     assert _extract_answer_letter("<answer>B</answer>") == "B"
-    assert _extract_answer_letter("Final: D") == "D"
+    assert _extract_answer_letter("Final: D") is None
     assert _extract_answer_letter("No option") is None
 
 
@@ -233,6 +242,7 @@ def test_mcq_option_judge_prompt_contains_choices_and_evidence() -> None:
     assert "A. up" in prompt
     assert "B. down" in prompt
     assert "Evidence:" in prompt
+    assert "Domain guidance:" in prompt
 
 
 def test_parse_mcq_option_scores_extracts_numeric_rows() -> None:
@@ -307,6 +317,62 @@ def test_mcq_option_rescue_skips_when_gate_not_triggered(monkeypatch) -> None:
     assert artifacts["rescue_applied"] is False
 
 
+def test_mcq_selected_option_evidence_gate_passes_with_strong_support(monkeypatch) -> None:
+    monkeypatch.setenv("SPARKIT_ENABLE_MCQ_EVIDENCE_GATE", "1")
+    stage = TraceStage(
+        name="mcq_option_scorer",
+        status=Status.COMPLETED,
+        model="test",
+        started_at=datetime.now(timezone.utc),
+        ended_at=datetime.now(timezone.utc),
+        artifacts={
+            "option_dossiers": {
+                "A": {
+                    "support_snippets": ["s1", "s2"],
+                    "counter_snippets": [],
+                    "dossier_score": 2.4,
+                }
+            },
+            "option_scores": {"A": {"net": 0.15}},
+        },
+    )
+    passed, artifacts = _mcq_selected_option_evidence_gate(
+        question="Q?\nAnswer Choices:\nA. alpha\nB. beta",
+        final_text="<answer>A</answer>",
+        stages=[stage],
+    )
+    assert passed is True
+    assert artifacts["reason"] == "ok"
+
+
+def test_mcq_selected_option_evidence_gate_fails_with_weak_support(monkeypatch) -> None:
+    monkeypatch.setenv("SPARKIT_ENABLE_MCQ_EVIDENCE_GATE", "1")
+    stage = TraceStage(
+        name="mcq_option_scorer",
+        status=Status.COMPLETED,
+        model="test",
+        started_at=datetime.now(timezone.utc),
+        ended_at=datetime.now(timezone.utc),
+        artifacts={
+            "option_dossiers": {
+                "A": {
+                    "support_snippets": [],
+                    "counter_snippets": ["c1"],
+                    "dossier_score": 0.4,
+                }
+            },
+            "option_scores": {"A": {"net": -0.2}},
+        },
+    )
+    passed, artifacts = _mcq_selected_option_evidence_gate(
+        question="Q?\nAnswer Choices:\nA. alpha\nB. beta",
+        final_text="<answer>A</answer>",
+        stages=[stage],
+    )
+    assert passed is False
+    assert artifacts["reason"] == "insufficient_support_for_selected_option"
+
+
 def test_mcq_option_scoring_prompt_has_required_format() -> None:
     prompt = _build_mcq_option_scoring_prompt(
         question="Which choice is correct?",
@@ -316,6 +382,19 @@ def test_mcq_option_scoring_prompt_has_required_format() -> None:
     assert "A: support=0.00, contradiction=0.00" in prompt
     assert "Answer choices:" in prompt
     assert "Evidence:" in prompt
+    assert "Domain guidance:" in prompt
+
+
+def test_question_domain_heuristics() -> None:
+    assert _question_domain("What catalyst controls enantioselective bromination mechanism?") == "chemistry"
+    assert _question_domain("Which gene expression change drives immune cell differentiation?") == "biology_medicine"
+    assert _question_domain("What is the best benchmark design?") == "general_stem"
+
+
+def test_domain_mcq_guidance_returns_nonempty() -> None:
+    text = _domain_mcq_guidance("What catalyst controls enantioselective bromination?")
+    assert isinstance(text, str)
+    assert len(text) > 10
 
 
 def test_mcq_option_elimination_prompt_and_parser() -> None:
@@ -417,6 +496,46 @@ def test_avg_relevance_scores_nonempty_records() -> None:
     ]
     assert _avg_relevance(question, records) > 0.0
     assert _avg_relevance(question, []) == 0.0
+
+
+def test_source_quality_prefers_high_trust_hosts_and_methods() -> None:
+    high = LiteratureRecord(
+        source="crossref",
+        title="Randomized prospective cohort benchmark in chemistry kinetics",
+        abstract="Systematic review with replication and mechanistic analysis.",
+        year=2025,
+        url="https://www.nature.com/articles/example",
+    )
+    low = LiteratureRecord(
+        source="brave_web",
+        title="Personal blog opinion",
+        abstract="Thoughts and commentary",
+        year=2020,
+        url="https://random-blog.example.com/post",
+    )
+    assert _record_source_quality_score(high) > _record_source_quality_score(low)
+
+
+def test_evidence_consensus_profile_detects_multi_source_hq_cluster() -> None:
+    records = [
+        LiteratureRecord(
+            source="crossref",
+            title="Enantioselective bromination in styrene reaction mechanism",
+            abstract="Mechanistic kinetics benchmark.",
+            year=2024,
+            url="https://www.nature.com/articles/a",
+        ),
+        LiteratureRecord(
+            source="europe_pmc",
+            title="Enantioselective bromination in styrene reaction mechanism",
+            abstract="Replication with NMR and kinetics.",
+            year=2023,
+            url="https://www.ncbi.nlm.nih.gov/pubmed/b",
+        ),
+    ]
+    profile = _evidence_consensus_profile(records)
+    assert profile["independent_hq_sources"] >= 2.0
+    assert profile["consensus_score"] > 0.4
 
 
 def test_env_bool_parses_truthy_and_falsy(monkeypatch) -> None:

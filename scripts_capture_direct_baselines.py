@@ -38,6 +38,7 @@ def _key_status() -> dict[str, bool]:
         "MISTRAL_API_KEY": bool(os.getenv("MISTRAL_API_KEY")),
         "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY")),
         "GOOGLE_API_KEY": bool(os.getenv("GOOGLE_API_KEY")),
+        "EXA_API_KEY": bool(os.getenv("EXA_API_KEY")),
     }
 
 

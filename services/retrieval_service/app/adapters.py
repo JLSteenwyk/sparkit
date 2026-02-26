@@ -15,7 +15,14 @@ CROSSREF_API_URL = "https://api.crossref.org/works"
 SEMANTIC_SCHOLAR_API_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 OPENALEX_API_URL = "https://api.openalex.org/works"
 EUROPE_PMC_API_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+PUBMED_ESEARCH_API_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+PUBMED_ESUMMARY_API_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+PUBMED_EFETCH_API_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 BRAVE_SEARCH_API_URL = "https://api.search.brave.com/res/v1/web/search"
+EXA_SEARCH_API_URL = "https://api.exa.ai/search"
+EXA_CONTENTS_API_URL = "https://api.exa.ai/contents"
+EXA_ANSWER_API_URL = "https://api.exa.ai/answer"
+EXA_RESEARCH_API_URL = "https://api.exa.ai/research"
 
 _SCIENCE_HOST_KEYWORDS = (
     "nature.com",
@@ -296,6 +303,117 @@ def search_europe_pmc(query: str, limit: int = 5, timeout_s: float = 15.0) -> li
     return records
 
 
+def search_pubmed_metadata(query: str, limit: int = 5, timeout_s: float = 15.0) -> list[LiteratureRecord]:
+    # PubMed E-utilities: metadata-only retrieval path to avoid fulltext publisher scraping failures.
+    tool = os.getenv("PUBMED_TOOL", "sparkit")
+    email = os.getenv("PUBMED_EMAIL", "")
+    api_key = os.getenv("PUBMED_API_KEY", "")
+    common = {"tool": tool}
+    if email:
+        common["email"] = email
+    if api_key:
+        common["api_key"] = api_key
+
+    search_params: dict[str, Any] = {
+        "db": "pubmed",
+        "retmode": "json",
+        "sort": "relevance",
+        "term": query,
+        "retmax": max(1, min(limit * 2, 25)),
+        **common,
+    }
+    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+        search_response = _get_with_retry(client, PUBMED_ESEARCH_API_URL, params=search_params)
+        payload = search_response.json()
+        id_list = ((payload.get("esearchresult") or {}).get("idlist") or []) if isinstance(payload, dict) else []
+        if not id_list:
+            return []
+        pmids = [str(pid) for pid in id_list[: max(1, min(len(id_list), 50))]]
+        summary_params = {
+            "db": "pubmed",
+            "retmode": "json",
+            "id": ",".join(pmids),
+            **common,
+        }
+        summary_response = _get_with_retry(client, PUBMED_ESUMMARY_API_URL, params=summary_params)
+        summary_payload = summary_response.json()
+        efetch_params = {
+            "db": "pubmed",
+            "retmode": "xml",
+            "id": ",".join(pmids),
+            **common,
+        }
+        efetch_response = _get_with_retry(client, PUBMED_EFETCH_API_URL, params=efetch_params)
+
+    result = summary_payload.get("result") or {}
+    uids = result.get("uids") or []
+    abstract_by_pmid: dict[str, str] = {}
+    try:
+        root = ET.fromstring(efetch_response.text)
+        for article in root.findall(".//PubmedArticle"):
+            pmid_node = article.find(".//PMID")
+            if pmid_node is None or not (pmid_node.text or "").strip():
+                continue
+            pmid = (pmid_node.text or "").strip()
+            parts: list[str] = []
+            for abs_node in article.findall(".//Abstract/AbstractText"):
+                label = (abs_node.attrib.get("Label") or "").strip()
+                text = "".join(abs_node.itertext()).strip()
+                if not text:
+                    continue
+                parts.append(f"{label}: {text}" if label else text)
+            if parts:
+                abstract_by_pmid[pmid] = " ".join(parts)
+    except Exception:
+        abstract_by_pmid = {}
+
+    records: list[LiteratureRecord] = []
+    for uid in uids:
+        row = result.get(str(uid)) or {}
+        if not isinstance(row, dict):
+            continue
+        title = (row.get("title") or "").strip()
+        if not title:
+            continue
+        pubdate = str(row.get("pubdate") or "")
+        year = None
+        for token in pubdate.split():
+            if len(token) == 4 and token.isdigit():
+                year = int(token)
+                break
+        authors = []
+        for author in (row.get("authors") or []):
+            if not isinstance(author, dict):
+                continue
+            name = (author.get("name") or "").strip()
+            if name:
+                authors.append(name)
+        article_ids = row.get("articleids") or []
+        doi = None
+        for aid in article_ids:
+            if not isinstance(aid, dict):
+                continue
+            if str(aid.get("idtype") or "").lower() == "doi":
+                doi = str(aid.get("value") or "").strip() or None
+                break
+        pmid = str(uid).strip()
+        url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+        records.append(
+            LiteratureRecord(
+                source="pubmed",
+                title=title,
+                abstract=abstract_by_pmid.get(pmid),
+                authors=authors,
+                year=year,
+                doi=doi,
+                url=url,
+            )
+        )
+        if len(records) >= max(1, limit):
+            break
+    return records
+
+
 def search_brave_web(query: str, limit: int = 5, timeout_s: float = 15.0) -> list[LiteratureRecord]:
     api_key = os.getenv("BRAVE_SEARCH_API_KEY")
     if not api_key:
@@ -337,3 +455,275 @@ def search_brave_web(query: str, limit: int = 5, timeout_s: float = 15.0) -> lis
         if len(records) >= limit:
             break
     return records
+
+
+def search_exa_web(query: str, limit: int = 5, timeout_s: float = 20.0) -> list[LiteratureRecord]:
+    api_key = os.getenv("EXA_API_KEY")
+    if not api_key:
+        return []
+    payload = {
+        "query": query,
+        "numResults": max(1, min(limit * 2, 25)),
+    }
+    headers = {
+        "x-api-key": api_key,
+        "Content-Type": "application/json",
+        "User-Agent": "SPARKIT/0.1",
+    }
+    last_exc: Exception | None = None
+    response: httpx.Response | None = None
+    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+        for attempt in range(3):
+            try:
+                response = client.post(EXA_SEARCH_API_URL, json=payload, headers=headers)
+                if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                    time.sleep(0.6 * (2**attempt))
+                    continue
+                response.raise_for_status()
+                break
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if attempt >= 2:
+                    raise
+                time.sleep(0.6 * (2**attempt))
+        if response is None:
+            if last_exc:
+                raise last_exc
+            return []
+    data = response.json()
+    items = data.get("results", []) if isinstance(data, dict) else []
+    records: list[LiteratureRecord] = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        url = row.get("url")
+        title = (row.get("title") or "").strip()
+        if not url or not title:
+            continue
+        text = (row.get("text") or row.get("snippet") or row.get("summary") or "").strip()
+        published = row.get("publishedDate") or row.get("published_date") or ""
+        year = None
+        if isinstance(published, str) and len(published) >= 4 and published[:4].isdigit():
+            year = int(published[:4])
+        author = row.get("author")
+        authors = [author.strip()] if isinstance(author, str) and author.strip() else []
+        records.append(
+            LiteratureRecord(
+                source="exa_web",
+                title=title,
+                abstract=text or None,
+                authors=authors,
+                year=year,
+                doi=None,
+                url=url,
+            )
+        )
+        if len(records) >= limit:
+            break
+    return records
+
+
+def _exa_headers(api_key: str) -> dict[str, str]:
+    return {
+        "x-api-key": api_key,
+        "Content-Type": "application/json",
+        "User-Agent": "SPARKIT/0.1",
+    }
+
+
+def _exa_post_with_retry(
+    client: httpx.Client,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    retries: int = 2,
+    backoff_s: float = 0.6,
+) -> dict[str, Any]:
+    last_exc: Exception | None = None
+    response: httpx.Response | None = None
+    for attempt in range(retries + 1):
+        try:
+            response = client.post(url, json=payload, headers=headers)
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < retries:
+                time.sleep(backoff_s * (2**attempt))
+                continue
+            response.raise_for_status()
+            body = response.json()
+            if isinstance(body, dict):
+                return body
+            return {}
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            if attempt >= retries:
+                raise
+            time.sleep(backoff_s * (2**attempt))
+    if last_exc:
+        raise last_exc
+    return {}
+
+
+def _exa_row_to_record(row: dict[str, Any], source: str) -> LiteratureRecord | None:
+    url = row.get("url")
+    title = (row.get("title") or "").strip()
+    if not isinstance(url, str) or not url.strip() or not title:
+        return None
+    published = row.get("publishedDate") or row.get("published_date") or ""
+    year = None
+    if isinstance(published, str) and len(published) >= 4 and published[:4].isdigit():
+        year = int(published[:4])
+    author = row.get("author")
+    authors = [author.strip()] if isinstance(author, str) and author.strip() else []
+    text = (row.get("text") or row.get("snippet") or row.get("summary") or "").strip() or None
+    return LiteratureRecord(
+        source=source,
+        title=title,
+        abstract=text,
+        authors=authors,
+        year=year,
+        doi=None,
+        url=url.strip(),
+    )
+
+
+def fetch_exa_contents(
+    urls: list[str],
+    timeout_s: float = 30.0,
+) -> list[LiteratureRecord]:
+    api_key = os.getenv("EXA_API_KEY")
+    if not api_key or not urls:
+        return []
+    clean_urls: list[str] = []
+    seen: set[str] = set()
+    for raw in urls:
+        if not isinstance(raw, str):
+            continue
+        url = raw.strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        clean_urls.append(url)
+    if not clean_urls:
+        return []
+    payload: dict[str, Any] = {
+        "urls": clean_urls[:25],
+        "text": True,
+    }
+    headers = _exa_headers(api_key)
+    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+        data = _exa_post_with_retry(client, EXA_CONTENTS_API_URL, payload, headers=headers)
+    records: list[LiteratureRecord] = []
+    for row in (data.get("results") or []):
+        if not isinstance(row, dict):
+            continue
+        parsed = _exa_row_to_record(row, source="exa_content")
+        if parsed:
+            records.append(parsed)
+    return records
+
+
+def search_exa_answer(query: str, limit: int = 5, timeout_s: float = 30.0) -> list[LiteratureRecord]:
+    api_key = os.getenv("EXA_API_KEY")
+    if not api_key:
+        return []
+    payload: dict[str, Any] = {"query": query, "text": True}
+    headers = _exa_headers(api_key)
+    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+        data = _exa_post_with_retry(client, EXA_ANSWER_API_URL, payload, headers=headers)
+
+    # Prefer explicit citations/sources, fallback to results.
+    citation_rows: list[dict[str, Any]] = []
+    for row in (data.get("citations") or []):
+        if isinstance(row, dict):
+            citation_rows.append(row)
+    if citation_rows:
+        out: list[LiteratureRecord] = []
+        for row in citation_rows:
+            url = row.get("url")
+            title = (row.get("title") or "").strip() or "Exa cited source"
+            if not isinstance(url, str) or not url.strip():
+                continue
+            out.append(
+                LiteratureRecord(
+                    source="exa_answer",
+                    title=title,
+                    abstract=None,
+                    authors=[],
+                    year=None,
+                    doi=None,
+                    url=url.strip(),
+                )
+            )
+            if len(out) >= max(1, limit):
+                break
+        if out:
+            return out
+
+    records: list[LiteratureRecord] = []
+    for row in (data.get("results") or []):
+        if not isinstance(row, dict):
+            continue
+        parsed = _exa_row_to_record(row, source="exa_answer")
+        if parsed:
+            records.append(parsed)
+            if len(records) >= max(1, limit):
+                break
+    return records
+
+
+def search_exa_research(query: str, limit: int = 5, timeout_s: float = 90.0) -> list[LiteratureRecord]:
+    api_key = os.getenv("EXA_API_KEY")
+    if not api_key:
+        return []
+    model = os.getenv("EXA_RESEARCH_MODEL", "exa-research")
+    poll_timeout_s = max(5, int(os.getenv("SPARKIT_EXA_RESEARCH_POLL_TIMEOUT_S", "90")))
+    poll_interval_s = max(1.0, float(os.getenv("SPARKIT_EXA_RESEARCH_POLL_INTERVAL_S", "2")))
+    create_payload: dict[str, Any] = {"instructions": query, "model": model}
+    headers = _exa_headers(api_key)
+    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+        created = _exa_post_with_retry(client, EXA_RESEARCH_API_URL, create_payload, headers=headers)
+        research_id = (
+            created.get("researchId")
+            or created.get("id")
+            or created.get("research_id")
+            or ""
+        )
+        if not isinstance(research_id, str) or not research_id.strip():
+            return []
+        deadline = time.time() + poll_timeout_s
+        result: dict[str, Any] = {}
+        while time.time() < deadline:
+            response = client.get(f"{EXA_RESEARCH_API_URL}/{research_id}", headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+            result = payload if isinstance(payload, dict) else {}
+            status = str(result.get("status") or "").lower()
+            if status in {"completed", "done", "succeeded", "success"}:
+                break
+            if status in {"failed", "error", "cancelled"}:
+                return []
+            time.sleep(poll_interval_s)
+
+    out: list[LiteratureRecord] = []
+    sources = result.get("sources") or result.get("citations") or result.get("results") or []
+    if isinstance(sources, list):
+        for row in sources:
+            if not isinstance(row, dict):
+                continue
+            parsed = _exa_row_to_record(row, source="exa_research")
+            if parsed:
+                out.append(parsed)
+            elif isinstance(row.get("url"), str):
+                out.append(
+                    LiteratureRecord(
+                        source="exa_research",
+                        title=(row.get("title") or "Exa research source").strip(),
+                        abstract=None,
+                        authors=[],
+                        year=None,
+                        doi=None,
+                        url=row["url"].strip(),
+                    )
+                )
+            if len(out) >= max(1, limit):
+                break
+    return out

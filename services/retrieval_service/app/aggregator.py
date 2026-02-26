@@ -7,11 +7,16 @@ from collections import defaultdict
 from urllib.parse import urlparse
 
 from .adapters import (
+    fetch_exa_contents,
     search_arxiv,
     search_brave_web,
     search_crossref,
+    search_exa_answer,
+    search_exa_research,
+    search_exa_web,
     search_europe_pmc,
     search_openalex,
+    search_pubmed_metadata,
     search_semantic_scholar,
 )
 from .models import LiteratureRecord
@@ -58,6 +63,33 @@ _LOW_TRUST_HOST_SUFFIXES = {
     "medium.com",
     "substack.com",
     "blogspot.com",
+}
+
+_ACADEMIC_HOST_SUFFIXES = {
+    "arxiv.org",
+    "biorxiv.org",
+    "medrxiv.org",
+    "nature.com",
+    "science.org",
+    "cell.com",
+    "nejm.org",
+    "thelancet.com",
+    "pnas.org",
+    "acs.org",
+    "rsc.org",
+    "wiley.com",
+    "springer.com",
+    "sciencedirect.com",
+    "biomedcentral.com",
+    "jamanetwork.com",
+    "bmj.com",
+    "nih.gov",
+    "ncbi.nlm.nih.gov",
+    "pubmed.ncbi.nlm.nih.gov",
+    "europepmc.org",
+    "doi.org",
+    ".edu",
+    ".gov",
 }
 
 
@@ -132,7 +164,13 @@ def _relevance_score(record: LiteratureRecord, query_tokens: set[str]) -> float:
     hay = f"{record.title} {record.abstract or ''}".lower()
     overlap = sum(1 for token in query_tokens if token in hay)
     year_bonus = (record.year or 0) / 10000.0
-    source_bonus = {"semantic_scholar": 0.03, "crossref": 0.02, "arxiv": 0.01}.get(record.source, 0.0)
+    source_bonus = {
+        "semantic_scholar": 0.03,
+        "crossref": 0.02,
+        "pubmed": 0.03,
+        "arxiv": 0.01,
+        "exa_web": 0.015,
+    }.get(record.source, 0.0)
     return overlap + year_bonus + source_bonus
 
 
@@ -180,7 +218,7 @@ def _env_domain_set(name: str) -> set[str]:
 
 def _source_base_trust(record: LiteratureRecord) -> float:
     source = (record.source or "").lower()
-    if source in {"arxiv", "crossref", "semantic_scholar", "openalex", "europe_pmc", "local_corpus"}:
+    if source in {"arxiv", "crossref", "semantic_scholar", "openalex", "europe_pmc", "pubmed", "local_corpus", "exa_web"}:
         return 0.9
     if source == "brave_web":
         return 0.45
@@ -233,6 +271,11 @@ def _passes_quality_policy(record: LiteratureRecord) -> bool:
     if source == "brave_web" and not allow_low_trust_brave:
         if _suffix_match(host, _LOW_TRUST_HOST_SUFFIXES):
             return False
+    science_enhanced = str(os.getenv("SPARKIT_SCIENCE_ENHANCED_MODE", "1")).lower() in {"1", "true", "yes"}
+    if science_enhanced and source in {"brave_web", "exa_web", "exa_answer", "exa_research", "exa_content"}:
+        # Keep web-style evidence academic by default.
+        if not record.doi and not _suffix_match(host, _ACADEMIC_HOST_SUFFIXES):
+            return False
     return True
 
 
@@ -263,7 +306,20 @@ def search_literature(
             ("openalex", search_openalex),
             ("europe_pmc", search_europe_pmc),
         ]
+        pubmed_enabled = str(os.getenv("SPARKIT_ENABLE_PUBMED_METADATA", "0")).lower() in {"1", "true", "yes"}
+        if pubmed_enabled:
+            adapters.append(("pubmed", search_pubmed_metadata))
     web_enabled = force_web or str(os.getenv("SPARKIT_ENABLE_WEB_SEARCH", "0")).lower() in {"1", "true", "yes"}
+    exa_enabled = str(os.getenv("SPARKIT_ENABLE_EXA_SEARCH", "0")).lower() in {"1", "true", "yes"}
+    exa_answer_enabled = str(os.getenv("SPARKIT_ENABLE_EXA_ANSWER", "0")).lower() in {"1", "true", "yes"}
+    exa_research_enabled = str(os.getenv("SPARKIT_ENABLE_EXA_RESEARCH", "0")).lower() in {"1", "true", "yes"}
+    exa_content_enabled = str(os.getenv("SPARKIT_ENABLE_EXA_CONTENT", "0")).lower() in {"1", "true", "yes"}
+    if exa_enabled and bool(os.getenv("EXA_API_KEY")):
+        adapters.append(("exa_web", search_exa_web))
+    if exa_answer_enabled and bool(os.getenv("EXA_API_KEY")):
+        adapters.append(("exa_answer", search_exa_answer))
+    if exa_research_enabled and bool(os.getenv("EXA_API_KEY")):
+        adapters.append(("exa_research", search_exa_research))
     if web_enabled and bool(os.getenv("BRAVE_SEARCH_API_KEY")):
         adapters.append(("brave_web", search_brave_web))
 
@@ -271,6 +327,7 @@ def search_literature(
     errors: dict[str, str] = {}
     request_counts: dict[str, int] = defaultdict(int)
     success_counts: dict[str, int] = defaultdict(int)
+    exa_content_pieces = 0
 
     local_fraction = max_results if not live_enabled else max(2, max_results // 3)
     local_enabled = str(os.getenv("SPARKIT_ENABLE_LOCAL_CORPUS", "1")).lower() not in {"0", "false", "no"}
@@ -351,6 +408,20 @@ def search_literature(
                 if not any_success and last_error:
                     errors[f"brave_web_fallback:{rewritten}"] = last_error
 
+    if exa_content_enabled and bool(os.getenv("EXA_API_KEY")) and combined:
+        try:
+            exa_content_cap = max(1, min(int(os.getenv("SPARKIT_EXA_CONTENT_MAX_URLS", "12")), 25))
+            candidate_urls = [record.url for record in combined[:exa_content_cap] if record.url]
+            if candidate_urls:
+                request_counts["exa_content"] += 1
+                exa_content_pieces += len(candidate_urls)
+                exa_content_records = fetch_exa_contents(candidate_urls)
+                if exa_content_records:
+                    combined.extend(exa_content_records)
+                    success_counts["exa_content"] += 1
+        except Exception as exc:  # noqa: BLE001
+            errors["exa_content"] = str(exc)
+
     ranked = sorted(
         combined,
         key=lambda x: (_relevance_score(x, query_tokens) + (0.6 * _quality_score(x))),
@@ -395,6 +466,7 @@ def search_literature(
         "filtered_domain_policy": {"count": filtered_domain_policy},
         "dns_error_count": dns_error_count,
         "brave_fallback_used": bool(success_counts.get("brave_web", 0) > 0 and not brave_attempted),
+        "exa_content_pieces": exa_content_pieces,
     }
     return diverse, errors, stats
 

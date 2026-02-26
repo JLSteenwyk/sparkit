@@ -20,6 +20,14 @@ class PricingRates:
 
 
 BRAVE_SEARCH_REQUEST_USD = 5.00 / 1000.0
+EXA_SEARCH_REQUEST_1_25_USD = 5.00 / 1000.0
+EXA_SEARCH_REQUEST_26_100_USD = 25.00 / 1000.0
+EXA_CONTENT_PIECE_USD = 1.00 / 1000.0
+EXA_ANSWER_REQUEST_USD = 5.00 / 1000.0
+EXA_RESEARCH_SEARCH_USD = 5.00 / 1000.0
+EXA_RESEARCH_PAGE_READ_USD = 5.00 / 1000.0
+EXA_RESEARCH_PRO_PAGE_READ_USD = 10.00 / 1000.0
+EXA_RESEARCH_REASONING_TOKEN_USD = 5.00 / 1_000_000.0
 
 
 def estimate_stage_cost(stage: str, units: int = 1) -> float:
@@ -37,6 +45,29 @@ def estimate_stage_cost(stage: str, units: int = 1) -> float:
 
 def estimate_brave_search_cost(request_count: int) -> float:
     return max(0, int(request_count)) * BRAVE_SEARCH_REQUEST_USD
+
+
+def estimate_exa_cost(
+    *,
+    search_requests_1_25: int = 0,
+    search_requests_26_100: int = 0,
+    content_pieces: int = 0,
+    answer_requests: int = 0,
+    research_search_requests: int = 0,
+    research_page_reads: int = 0,
+    research_pro_page_reads: int = 0,
+    research_reasoning_tokens: int = 0,
+) -> float:
+    return (
+        max(0, int(search_requests_1_25)) * EXA_SEARCH_REQUEST_1_25_USD
+        + max(0, int(search_requests_26_100)) * EXA_SEARCH_REQUEST_26_100_USD
+        + max(0, int(content_pieces)) * EXA_CONTENT_PIECE_USD
+        + max(0, int(answer_requests)) * EXA_ANSWER_REQUEST_USD
+        + max(0, int(research_search_requests)) * EXA_RESEARCH_SEARCH_USD
+        + max(0, int(research_page_reads)) * EXA_RESEARCH_PAGE_READ_USD
+        + max(0, int(research_pro_page_reads)) * EXA_RESEARCH_PRO_PAGE_READ_USD
+        + max(0, int(research_reasoning_tokens)) * EXA_RESEARCH_REASONING_TOKEN_USD
+    )
 
 
 DEFAULT_MODEL_PRICING: dict[tuple[str, str], PricingRates] = {

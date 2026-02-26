@@ -131,7 +131,7 @@ def test_search_literature_tracks_brave_request_counts(monkeypatch):
                 title=f"Brave hit: {query}",
                 abstract="web",
                 year=2025,
-                url=f"https://example.org/{abs(hash(query))}",
+                url=f"https://www.nature.com/articles/{abs(hash(query))}",
             )
         ],
     )
@@ -159,7 +159,7 @@ def test_search_literature_force_web_uses_brave_even_when_env_disabled(monkeypat
                 title=f"Forced web hit: {query}",
                 abstract="web",
                 year=2025,
-                url=f"https://example.org/force/{abs(hash(query))}",
+                url=f"https://www.nature.com/articles/force-{abs(hash(query))}",
             )
         ],
     )
@@ -201,7 +201,7 @@ def test_search_literature_auto_brave_fallback_on_dns_errors(monkeypatch):
                 title=f"Brave fallback hit: {query}",
                 abstract="web",
                 year=2025,
-                url=f"https://example.org/fallback/{abs(hash(query))}",
+                url=f"https://www.nature.com/articles/fallback-{abs(hash(query))}",
             )
         ],
     )
@@ -210,6 +210,209 @@ def test_search_literature_auto_brave_fallback_on_dns_errors(monkeypatch):
     assert records
     assert any(record.source == "brave_web" for record in records)
     assert stats.get("brave_fallback_used") is True
+
+
+def test_search_literature_uses_exa_when_enabled(monkeypatch):
+    monkeypatch.setenv("SPARKIT_ENABLE_EXA_SEARCH", "1")
+    monkeypatch.setenv("EXA_API_KEY", "test-key")
+    monkeypatch.setattr(aggregator, "search_arxiv", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_crossref", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_semantic_scholar", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_openalex", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_europe_pmc", lambda query, limit: [])
+    monkeypatch.setattr(
+        aggregator,
+        "search_exa_web",
+        lambda query, limit: [
+            LiteratureRecord(
+                source="exa_web",
+                title=f"Exa hit: {query}",
+                abstract="exa",
+                year=2025,
+                url=f"https://www.nature.com/articles/exa-{abs(hash(query))}",
+            )
+        ],
+    )
+
+    records, errors, stats = aggregator.search_literature("biology chemistry", max_results=6)
+    assert errors == {}
+    assert records
+    assert any(record.source == "exa_web" for record in records)
+    assert (stats.get("requests_by_source") or {}).get("exa_web", 0) > 0
+
+
+def test_search_literature_uses_pubmed_when_enabled(monkeypatch):
+    monkeypatch.setenv("SPARKIT_ENABLE_PUBMED_METADATA", "1")
+    monkeypatch.setattr(aggregator, "search_arxiv", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_crossref", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_semantic_scholar", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_openalex", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_europe_pmc", lambda query, limit: [])
+    monkeypatch.setattr(
+        aggregator,
+        "search_pubmed_metadata",
+        lambda query, limit: [
+            LiteratureRecord(
+                source="pubmed",
+                title=f"PubMed hit: {query}",
+                abstract="pubmed metadata abstract",
+                year=2024,
+                doi="10.1000/pubmed-demo",
+                url=f"https://pubmed.ncbi.nlm.nih.gov/{abs(hash(query))}/",
+            )
+        ],
+    )
+    records, errors, stats = aggregator.search_literature("biology chemistry", max_results=6)
+    assert errors == {}
+    assert records
+    assert any(record.source == "pubmed" for record in records)
+    assert (stats.get("requests_by_source") or {}).get("pubmed", 0) > 0
+
+
+def test_search_literature_uses_exa_answer_when_enabled(monkeypatch):
+    monkeypatch.setenv("SPARKIT_ENABLE_EXA_ANSWER", "1")
+    monkeypatch.setenv("EXA_API_KEY", "test-key")
+    monkeypatch.setattr(aggregator, "search_arxiv", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_crossref", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_semantic_scholar", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_openalex", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_europe_pmc", lambda query, limit: [])
+    monkeypatch.setattr(
+        aggregator,
+        "search_exa_answer",
+        lambda query, limit: [
+            LiteratureRecord(
+                source="exa_answer",
+                title=f"Exa answer hit: {query}",
+                abstract="exa answer",
+                year=2025,
+                url=f"https://www.nature.com/articles/exa-answer-{abs(hash(query))}",
+            )
+        ],
+    )
+
+    records, errors, stats = aggregator.search_literature("biology chemistry", max_results=6)
+    assert errors == {}
+    assert records
+    assert any(record.source == "exa_answer" for record in records)
+    assert (stats.get("requests_by_source") or {}).get("exa_answer", 0) > 0
+
+
+def test_search_literature_uses_exa_research_when_enabled(monkeypatch):
+    monkeypatch.setenv("SPARKIT_ENABLE_EXA_RESEARCH", "1")
+    monkeypatch.setenv("EXA_API_KEY", "test-key")
+    monkeypatch.setattr(aggregator, "search_arxiv", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_crossref", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_semantic_scholar", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_openalex", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_europe_pmc", lambda query, limit: [])
+    monkeypatch.setattr(
+        aggregator,
+        "search_exa_research",
+        lambda query, limit: [
+            LiteratureRecord(
+                source="exa_research",
+                title=f"Exa research hit: {query}",
+                abstract="exa research",
+                year=2025,
+                url=f"https://www.nature.com/articles/exa-research-{abs(hash(query))}",
+            )
+        ],
+    )
+
+    records, errors, stats = aggregator.search_literature("biology chemistry", max_results=6)
+    assert errors == {}
+    assert records
+    assert any(record.source == "exa_research" for record in records)
+    assert (stats.get("requests_by_source") or {}).get("exa_research", 0) > 0
+
+
+def test_search_literature_uses_exa_content_enrichment(monkeypatch):
+    monkeypatch.setenv("SPARKIT_ENABLE_EXA_SEARCH", "1")
+    monkeypatch.setenv("SPARKIT_ENABLE_EXA_CONTENT", "1")
+    monkeypatch.setenv("EXA_API_KEY", "test-key")
+    monkeypatch.setattr(aggregator, "search_arxiv", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_crossref", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_semantic_scholar", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_openalex", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_europe_pmc", lambda query, limit: [])
+    monkeypatch.setattr(
+        aggregator,
+        "search_exa_web",
+        lambda query, limit: [
+            LiteratureRecord(
+                source="exa_web",
+                title=f"Exa web hit: {query}",
+                abstract="exa",
+                year=2025,
+                url=f"https://www.nature.com/articles/exa-content-{abs(hash(query))}",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        aggregator,
+        "fetch_exa_contents",
+        lambda urls: [
+            LiteratureRecord(
+                source="exa_content",
+                title="Exa content enrichment",
+                abstract="full content",
+                year=2025,
+                url=urls[0],
+            )
+        ],
+    )
+
+    records, errors, stats = aggregator.search_literature("biology chemistry", max_results=6)
+    assert errors == {}
+    assert records
+    assert (stats.get("requests_by_source") or {}).get("exa_content", 0) > 0
+    assert (stats.get("successful_requests_by_source") or {}).get("exa_content", 0) > 0
+
+
+def test_science_enhanced_mode_filters_non_academic_web_sources(monkeypatch):
+    monkeypatch.setenv("SPARKIT_ENABLE_EXA_SEARCH", "1")
+    monkeypatch.setenv("SPARKIT_ENABLE_WEB_SEARCH", "1")
+    monkeypatch.setenv("EXA_API_KEY", "test-key")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-key")
+    monkeypatch.setenv("SPARKIT_SCIENCE_ENHANCED_MODE", "1")
+    monkeypatch.setenv("SPARKIT_ENABLE_LOCAL_CORPUS", "0")
+    monkeypatch.setattr(aggregator, "search_arxiv", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_crossref", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_semantic_scholar", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_openalex", lambda query, limit: [])
+    monkeypatch.setattr(aggregator, "search_europe_pmc", lambda query, limit: [])
+    monkeypatch.setattr(
+        aggregator,
+        "search_exa_web",
+        lambda query, limit: [
+            LiteratureRecord(
+                source="exa_web",
+                title="Non-academic web result",
+                abstract="web",
+                year=2025,
+                url="https://example.org/non-academic",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        aggregator,
+        "search_brave_web",
+        lambda query, limit: [
+            LiteratureRecord(
+                source="brave_web",
+                title="Non-academic web result",
+                abstract="web",
+                year=2025,
+                url="https://example.org/non-academic",
+            )
+        ],
+    )
+
+    records, errors, stats = aggregator.search_literature("biology chemistry", max_results=6)
+    assert errors == {}
+    assert records == []
+    assert (stats.get("filtered_low_quality") or {}).get("count", 0) >= 1
 
 
 def test_search_literature_can_run_local_only(monkeypatch):

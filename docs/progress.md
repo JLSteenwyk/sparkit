@@ -31,6 +31,40 @@ Last updated: 2026-02-25
 - None.
 
 ## Recent updates
+- 2026-02-26: Hardened MCQ fallback/selection robustness:
+  - Replaced heuristic parse fallback with strict arbitration fallback (`SPARKIT_ENABLE_MCQ_ARBITRATION_FALLBACK`) and non-alphabetical deterministic tie-break.
+  - Added `mcq_parse_failure` trace stage for scorer/judge/arbitration parse diagnostics.
+  - Added benchmark-level MCQ collapse detector in manifests (`mcq_collapse_warning` + letter distribution fields).
+- 2026-02-26: Set up scholarly metadata endpoints to reduce publisher-page scrape failures:
+  - Added PubMed E-utilities adapter `search_pubmed_metadata` in `services/retrieval_service/app/adapters.py`.
+  - PubMed adapter now enriches metadata hits with abstracts via EFetch XML.
+  - Added retrieval toggle `SPARKIT_ENABLE_PUBMED_METADATA` in aggregator.
+  - Added metadata-first corpus hydrator `scripts_ingest_scholarly_metadata.py` with targeted fulltext parsing for top-k candidates per question, then metadata fallback.
+- 2026-02-26: Upgraded MCQ option selection:
+  - Added domain-aware MCQ prompting (`chemistry` vs `biology_medicine` guidance) across synthesis/judge/scoring prompts.
+  - Added dual-scorer MCQ blending (`SPARKIT_ENABLE_MCQ_DUAL_SCORER`) with primary+adversarial score fusion and dossier-aware weighting.
+  - Barometer run `barometer10_science_enhanced_mcq_dual_selector_20260226T023728Z`: score stayed `0.30`, cost/latency remained stable vs science-enhanced baseline.
+- 2026-02-26: Implemented MCQ evidence-to-answer hard constraint:
+  - Added `mcq_evidence_gate` policy that validates selected option support from option dossiers/scores.
+  - Gate is enforced in confidence-retry phase (can trigger one retrieval retry) and finalization (confidence penalty + uncertainty reason on failure).
+  - Added tests for pass/fail behavior in `services/orchestrator/tests/test_synthesis_quality.py`.
+- 2026-02-26: Enabled science-enhanced retrieval policy by default:
+  - Added `SPARKIT_SCIENCE_ENHANCED_MODE` (default `1`) in retrieval quality filtering.
+  - Web-style sources (Brave/Exa) are now filtered to academic domains unless DOI-backed.
+  - Added retrieval test coverage to verify non-academic web results are dropped in science-enhanced mode.
+- 2026-02-25: Implemented source-quality + evidence-consensus gating:
+  - Added source quality scoring (`_record_source_quality_score`) and priority ranking for ingestion selection.
+  - Added evidence consensus profiling (`_evidence_consensus_profile`) with independent high-quality source checks.
+  - Final confidence now receives explicit penalties when evidence lacks multi-source high-quality support or consensus.
+  - Added `evidence_consensus_gate` trace stage and updated synthesis-quality tests.
+- 2026-02-25: Expanded Exa retrieval integration:
+  - Added adapters for Exa `answer`, `content`, and `research` APIs in `services/retrieval_service/app/adapters.py`.
+  - Wired aggregator flags `SPARKIT_ENABLE_EXA_ANSWER`, `SPARKIT_ENABLE_EXA_CONTENT`, `SPARKIT_ENABLE_EXA_RESEARCH`.
+  - Added Exa content hydration step over top retrieved URLs and request telemetry entries (`exa_answer`, `exa_research`, `exa_content`).
+  - Added test coverage in `services/retrieval_service/tests/test_aggregator.py`.
+- 2026-02-25: Added Exa endpoint-level cost accounting in orchestrator:
+  - Retrieval now computes Exa costs from telemetry (`exa_web`, `exa_answer`, `exa_research`, `exa_content_pieces`).
+  - Final `provider_usage` includes Exa rows (`search-api`, `answer-api`, `research-api`, `contents-api`) when used.
 - 2026-02-25: Verified strict evaluator path is active (`multipleChoice` letter match + `exactMatch` dual LLM graders).
 - 2026-02-25: Fixed OpenAI exact-match grader fallback for GPT-5-family 400/404 responses in `services/orchestrator/app/providers/clients.py`.
 - 2026-02-25: Ran rephrase-then-answer A/B:

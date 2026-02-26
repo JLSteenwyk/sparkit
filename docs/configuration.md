@@ -1,6 +1,6 @@
 # Configuration
 
-Last updated: 2026-02-22
+Last updated: 2026-02-25
 
 ## Required environment variables
 Set these provider keys in the runtime environment (do not hardcode):
@@ -13,6 +13,10 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `MISTRAL_API_KEY`
 - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - `BRAVE_SEARCH_API_KEY` (optional; only for Google-like web discovery when enabled)
+- `EXA_API_KEY` (optional; enables Exa search/answer/content/research adapters when enabled)
+- `PUBMED_API_KEY` (optional; increases NCBI E-utilities rate limit for PubMed metadata adapter)
+- `PUBMED_EMAIL` (optional but recommended by NCBI for E-utilities identification)
+- `PUBMED_TOOL` (optional; default `sparkit`)
 
 ## Database
 - `DATABASE_URL` (example: `postgresql://postgres:postgres@localhost:5432/sparkit`)
@@ -52,6 +56,16 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `DIRECT_CALL_RETRY_BACKOFF_S` (default: `0.8`, exponential backoff base seconds)
 - `SPARKIT_MODEL_PRICING_JSON` (optional per-model pricing override map)
 - `SPARKIT_ENABLE_WEB_SEARCH` (default: `0`; set `1` to enable Brave web-search adapter in retrieval)
+- `SPARKIT_SCIENCE_ENHANCED_MODE` (default: `1`; enforces academic-domain filtering for web-style evidence sources such as Brave/Exa unless DOI-backed)
+- `SPARKIT_ENABLE_EXA_SEARCH` (default: `0`; set `1` to enable Exa search adapter in retrieval)
+- `SPARKIT_ENABLE_PUBMED_METADATA` (default: `0`; set `1` to enable PubMed E-utilities metadata adapter in live retrieval)
+- `SPARKIT_ENABLE_EXA_ANSWER` (default: `0`; set `1` to enable Exa answer adapter in retrieval)
+- `SPARKIT_ENABLE_EXA_RESEARCH` (default: `0`; set `1` to enable Exa research adapter in retrieval)
+- `SPARKIT_ENABLE_EXA_CONTENT` (default: `0`; set `1` to enrich retrieved URLs with Exa content API)
+- `SPARKIT_EXA_CONTENT_MAX_URLS` (default: `12`; max URLs to hydrate via Exa content endpoint per retrieval call)
+- `EXA_RESEARCH_MODEL` (default: `exa-research`; Exa research model override)
+- `SPARKIT_EXA_RESEARCH_POLL_TIMEOUT_S` (default: `90`; polling timeout for Exa research jobs)
+- `SPARKIT_EXA_RESEARCH_POLL_INTERVAL_S` (default: `2`; poll interval seconds for Exa research jobs)
 - `SPARKIT_ENABLE_LIVE_RETRIEVAL` (default: `1`; set `0` to disable live network adapters and use local corpus retrieval only)
 - `SPARKIT_ENABLE_FALSIFICATION_ROUND` (default: `1`; adds a dedicated falsification retrieval round)
 - `SPARKIT_FALSIFICATION_MAX_QUERIES` (default: `10`; cap for generated falsification queries)
@@ -61,6 +75,15 @@ Set these provider keys in the runtime environment (do not hardcode):
 - `SPARKIT_ENABLE_SEMANTIC_RERANK_FINAL` (default: inherits `SPARKIT_ENABLE_SEMANTIC_RERANK`; reranks final ingestion set before parsing)
 - `SPARKIT_SEMANTIC_RERANK_CANDIDATES` (default: `18`; candidate cap for semantic rerank prompt)
 - `SPARKIT_INGESTION_DIVERSITY_LAMBDA` (default: `0.75`; MMR-style relevance/novelty tradeoff for ingestion selection)
+- `SPARKIT_SOURCE_QUALITY_WEIGHT` (default: `1.10`; how strongly source-quality contributes to ingestion ranking vs lexical relevance)
+- `SPARKIT_HQ_SOURCE_THRESHOLD` (default: `1.70`; threshold for classifying a record as high-quality in consensus gating)
+- `SPARKIT_ENABLE_MCQ_EVIDENCE_GATE` (default: `1`; requires selected MCQ option to have sufficient option-level support evidence)
+- `SPARKIT_MCQ_EVIDENCE_MIN_SUPPORT_SNIPPETS` (default: `2`)
+- `SPARKIT_MCQ_EVIDENCE_MIN_DOSSIER_SCORE` (default: `1.8`)
+- `SPARKIT_MCQ_EVIDENCE_MIN_NET_SCORE` (default: `0.0`)
+- `SPARKIT_MCQ_EVIDENCE_GATE_CONF_PENALTY` (default: `0.20`; confidence penalty if gate fails at finalization)
+- `SPARKIT_ENABLE_MCQ_DUAL_SCORER` (default: `1`; runs a second adversarial MCQ scorer pass and blends both score sets)
+- `SPARKIT_ENABLE_MCQ_ARBITRATION_FALLBACK` (default: `1`; when MCQ scorer/judge output is unparseable, run a strict arbitration call instead of heuristic defaulting)
 - `SPARKIT_ENABLE_CLAIM_GAP_LOOP` (default: `1`; injects claim-gap follow-up queries from each completed retrieval round into the next round)
 - `SPARKIT_CLAIM_GAP_MAX_QUERIES` (default: `4`; max injected claim-gap queries per stage)
 - `SPARKIT_CLAIM_GAP_MAX_NEXT_QUERIES` (default: `12`; max merged query count for next stage after gap injection)
@@ -101,7 +124,9 @@ Set these provider keys in the runtime environment (do not hardcode):
   - When set to `1`, SPARKIT keeps the best synthesized answer text (soft-abstain) instead of replacing it with an "insufficient evidence" refusal, while still lowering confidence and recording abstain reasons.
 
 ## Notes
-- Retrieval source coverage includes: arXiv, Crossref, Semantic Scholar, OpenAlex, and Europe PMC.
+- Retrieval source coverage includes: arXiv, Crossref, Semantic Scholar, OpenAlex, Europe PMC, and optional Exa adapters (`search`, `answer`, `research`, `content` hydration).
+- Finalization now applies an evidence-consensus gate: confidence is penalized when decisive claims lack independent high-quality source support.
+- Retrieval science mode defaults to academic-first filtering for web-style sources (`brave_web`, `exa_web`, `exa_answer`, `exa_research`, `exa_content`), reducing non-scholarly evidence leakage.
 - Optional Google-like discovery: Brave Search adapter (key-gated + science-domain filtering) when `SPARKIT_ENABLE_WEB_SEARCH=1`.
 - Retrieval uses local-first corpus lookup when populated, then falls back to live source federation.
 - Evidence ingestion/retrieval hard-blocks HLE-related domains (`huggingface.co`, `futurehouse.org`) to prevent benchmark-answer leakage through downloaded content.
@@ -125,12 +150,20 @@ Set these provider keys in the runtime environment (do not hardcode):
 - Brave Search request pricing (for retrieval web adapter):
   - `$5.00 / 1,000 requests` = `$0.005` per request
   - SPARKIT now tracks actual Brave request attempts during retrieval and adds this to run `provider_usage` as `provider=brave_web`, `model=search-api`.
+- Exa request pricing (for retrieval adapters):
+  - Search (1-25 results): `$5.00 / 1,000` requests (`exa_web`).
+  - Search (26-100 results): `$25.00 / 1,000` requests (not used by default, current `numResults <= 25`).
+  - Content: `$1.00 / 1,000` pieces (`exa_content`, tracked via `exa_content_pieces`).
+  - Answer: `$5.00 / 1,000` requests (`exa_answer`).
+  - Research: `$5.00 / 1,000` agent searches (`exa_research`).
+  - Research page reads / reasoning tokens are supported in policy function, but current retrieval telemetry does not yet emit those counters by default.
 - Cost precision note: exact generation cost is computed when model pricing is configured (built-in defaults + `SPARKIT_MODEL_PRICING_JSON` overrides). Unknown models fall back to deterministic synthesis-stage estimates.
 - `SPARKIT_MODEL_PRICING_JSON` supports either:
   - `{"provider:model":{"input_cache_hit":...,"input_cache_miss":...,"output":...}}`
   - `{"provider":{"model":{"input_cache_hit":...,"input_cache_miss":...,"output":...}}}`
 - Latency policy note: default `max_latency_s` is unset (`null`), so no latency cap is applied unless explicitly set.
 - Direct-call quality note: empty parsed answers are now counted as failures (`empty_answer_text`).
+- Benchmark manifest includes MCQ collapse detection fields per config (`mcq_letter_distribution`, `mcq_dominant_ratio`, `mcq_collapse_warning`), with threshold controlled by `SPARKIT_MCQ_COLLAPSE_THRESHOLD` (default `0.70`).
 - DeepSeek direct-call note: when DeepSeek returns empty `message.content` but populated `reasoning_content`, provider adapter falls back to reasoning text to avoid false hard-failures.
 - Timeout note: tuned provider defaults are Grok `60s`, DeepSeek `45s`, and `35s` for other providers unless overridden by env vars.
 - Kimi response note: Kimi responses with empty `message.content` are treated as failures to avoid silently accepting reasoning-only outputs.
@@ -144,3 +177,4 @@ Set these provider keys in the runtime environment (do not hardcode):
 - Full benchmark eval command: `make eval-benchmark-full`.
 - Drift check command (sample): `make drift-check-sample`.
 - Corpus build command (broad science ingestion): `make corpus-build`.
+- Scholarly metadata ingestion command (metadata-first + targeted fulltext for top candidates): `./venv/bin/python scripts_ingest_scholarly_metadata.py --questions benchmarks/hle_gold_bio_chem/questions_barometer10_direct30.json --include-pubmed --fulltext-top-k 6`.

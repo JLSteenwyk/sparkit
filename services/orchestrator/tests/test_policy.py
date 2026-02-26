@@ -4,6 +4,7 @@ from services.orchestrator.app.policy import (
     BudgetState,
     contradiction_depth_from_budget,
     estimate_brave_search_cost,
+    estimate_exa_cost,
     estimate_generation_cost,
     estimate_stage_cost,
     has_exact_pricing,
@@ -127,3 +128,27 @@ def test_generation_cost_gemini_31_tiered_pricing_switches_above_200k_prompt() -
 def test_brave_request_cost() -> None:
     assert abs(estimate_brave_search_cost(1) - 0.005) < 1e-12
     assert abs(estimate_brave_search_cost(1000) - 5.0) < 1e-12
+
+
+def test_exa_cost_components() -> None:
+    cost = estimate_exa_cost(
+        search_requests_1_25=10,
+        search_requests_26_100=2,
+        content_pieces=20,
+        answer_requests=3,
+        research_search_requests=4,
+        research_page_reads=5,
+        research_pro_page_reads=6,
+        research_reasoning_tokens=100_000,
+    )
+    expected = (
+        10 * (5.0 / 1000.0)
+        + 2 * (25.0 / 1000.0)
+        + 20 * (1.0 / 1000.0)
+        + 3 * (5.0 / 1000.0)
+        + 4 * (5.0 / 1000.0)
+        + 5 * (5.0 / 1000.0)
+        + 6 * (10.0 / 1000.0)
+        + 100_000 * (5.0 / 1_000_000.0)
+    )
+    assert abs(cost - expected) < 1e-12

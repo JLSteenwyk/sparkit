@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from shared.schemas.domain import (
     Answer,
@@ -28,6 +29,7 @@ from services.orchestrator.app.policy import (
     BudgetState,
     contradiction_depth_from_budget,
     estimate_brave_search_cost,
+    estimate_exa_cost,
     estimate_generation_cost,
     estimate_stage_cost,
     should_stop_early,
@@ -69,6 +71,47 @@ _STOPWORDS = {
     "analysis",
     "model",
     "models",
+}
+
+_HIGH_QUALITY_HOST_SUFFIXES = {
+    "nature.com",
+    "science.org",
+    "cell.com",
+    "thelancet.com",
+    "nejm.org",
+    "pnas.org",
+    "acs.org",
+    "rsc.org",
+    "wiley.com",
+    "springer.com",
+    "sciencedirect.com",
+    "jamanetwork.com",
+    "bmj.com",
+    "nih.gov",
+    "ncbi.nlm.nih.gov",
+    "pubmed.ncbi.nlm.nih.gov",
+    "europepmc.org",
+    "arxiv.org",
+    ".edu",
+    ".gov",
+}
+
+_METHOD_SIGNAL_TERMS = {
+    "randomized",
+    "double-blind",
+    "meta-analysis",
+    "systematic review",
+    "prospective",
+    "cohort",
+    "case-control",
+    "replication",
+    "benchmark",
+    "ablation",
+    "mechanistic",
+    "reaction mechanism",
+    "kinetics",
+    "nmr",
+    "crystallography",
 }
 
 
@@ -126,7 +169,13 @@ class RetrievalExecutionResult:
     spent_usd: float
     retrieval_base_cost_usd: float
     retrieval_brave_cost_usd: float
+    retrieval_exa_cost_usd: float
     brave_request_count: int
+    exa_web_request_count: int
+    exa_answer_request_count: int
+    exa_research_request_count: int
+    exa_content_request_count: int
+    exa_content_piece_count: int
     budget_stop_reason: str | None
 
 
@@ -137,7 +186,13 @@ class LiveWebFetchResult:
     spent_usd: float
     retrieval_base_cost_usd: float
     retrieval_brave_cost_usd: float
+    retrieval_exa_cost_usd: float
     brave_request_count: int
+    exa_web_request_count: int
+    exa_answer_request_count: int
+    exa_research_request_count: int
+    exa_content_request_count: int
+    exa_content_piece_count: int
 
 
 @dataclass(frozen=True)
@@ -216,7 +271,13 @@ class BudgetStateRuntime:
     budget_stop_reason: str | None
     retrieval_base_cost_usd: float
     retrieval_brave_cost_usd: float
+    retrieval_exa_cost_usd: float
     brave_request_count: int
+    exa_web_request_count: int
+    exa_answer_request_count: int
+    exa_research_request_count: int
+    exa_content_request_count: int
+    exa_content_piece_count: int
     verifier_cost: float = 0.0
 
 
@@ -407,7 +468,13 @@ def _run_retrieval_rounds(
     spent_usd = 0.0
     retrieval_base_cost_usd = 0.0
     retrieval_brave_cost_usd = 0.0
+    retrieval_exa_cost_usd = 0.0
     brave_request_count = 0
+    exa_web_request_count = 0
+    exa_answer_request_count = 0
+    exa_research_request_count = 0
+    exa_content_request_count = 0
+    exa_content_piece_count = 0
     adaptive = _adaptive_retrieval_config(len(rounds))
     seen_record_ids: set[str] = set()
     prev_selected_quality = 0.0
@@ -456,6 +523,11 @@ def _run_retrieval_rounds(
         stage_records: list[LiteratureRecord] = []
         stage_errors: dict[str, str] = {}
         stage_brave_requests = 0
+        stage_exa_web_requests = 0
+        stage_exa_answer_requests = 0
+        stage_exa_research_requests = 0
+        stage_exa_content_requests = 0
+        stage_exa_content_pieces = 0
         resolved_queries: list[str] = []
         for query in queries:
             resolved_query = query
@@ -478,7 +550,13 @@ def _run_retrieval_rounds(
             stage_records.extend(found)
             for source, err in errors.items():
                 stage_errors[f"{source}:{resolved_query}"] = err
-            stage_brave_requests += int((stats.get("requests_by_source") or {}).get("brave_web", 0))
+            requests_by_source = stats.get("requests_by_source") or {}
+            stage_brave_requests += int(requests_by_source.get("brave_web", 0))
+            stage_exa_web_requests += int(requests_by_source.get("exa_web", 0))
+            stage_exa_answer_requests += int(requests_by_source.get("exa_answer", 0))
+            stage_exa_research_requests += int(requests_by_source.get("exa_research", 0))
+            stage_exa_content_requests += int(requests_by_source.get("exa_content", 0))
+            stage_exa_content_pieces += int(stats.get("exa_content_pieces", 0))
 
         deduped_stage = _dedupe_records(stage_records)
         if claim_slots and _env_bool("SPARKIT_ENABLE_MARGINAL_COVERAGE_RERANK", True):
@@ -524,11 +602,23 @@ def _run_retrieval_rounds(
 
         stage_base_cost = estimate_stage_cost("retrieval", units=len(queries))
         stage_brave_cost = estimate_brave_search_cost(stage_brave_requests)
-        stage_cost = stage_base_cost + stage_brave_cost
+        stage_exa_cost = estimate_exa_cost(
+            search_requests_1_25=stage_exa_web_requests,
+            content_pieces=stage_exa_content_pieces,
+            answer_requests=stage_exa_answer_requests,
+            research_search_requests=stage_exa_research_requests,
+        )
+        stage_cost = stage_base_cost + stage_brave_cost + stage_exa_cost
         spent_usd += stage_cost
         retrieval_base_cost_usd += stage_base_cost
         retrieval_brave_cost_usd += stage_brave_cost
+        retrieval_exa_cost_usd += stage_exa_cost
         brave_request_count += stage_brave_requests
+        exa_web_request_count += stage_exa_web_requests
+        exa_answer_request_count += stage_exa_answer_requests
+        exa_research_request_count += stage_exa_research_requests
+        exa_content_request_count += stage_exa_content_requests
+        exa_content_piece_count += stage_exa_content_pieces
         duration_ms = int((datetime.now(timezone.utc) - stage_start).total_seconds() * 1000)
         observability.add_stage(
             StageMetric(
@@ -560,6 +650,12 @@ def _run_retrieval_rounds(
                     "source_errors": stage_errors,
                     "brave_requests": stage_brave_requests,
                     "brave_cost_usd": stage_brave_cost,
+                    "exa_search_requests": stage_exa_web_requests,
+                    "exa_answer_requests": stage_exa_answer_requests,
+                    "exa_research_requests": stage_exa_research_requests,
+                    "exa_content_requests": stage_exa_content_requests,
+                    "exa_content_pieces": stage_exa_content_pieces,
+                    "exa_cost_usd": stage_exa_cost,
                     "estimated_cost_usd": stage_cost,
                 },
             )
@@ -695,7 +791,13 @@ def _run_retrieval_rounds(
         spent_usd=spent_usd,
         retrieval_base_cost_usd=retrieval_base_cost_usd,
         retrieval_brave_cost_usd=retrieval_brave_cost_usd,
+        retrieval_exa_cost_usd=retrieval_exa_cost_usd,
         brave_request_count=brave_request_count,
+        exa_web_request_count=exa_web_request_count,
+        exa_answer_request_count=exa_answer_request_count,
+        exa_research_request_count=exa_research_request_count,
+        exa_content_request_count=exa_content_request_count,
+        exa_content_piece_count=exa_content_piece_count,
         budget_stop_reason=budget_stop_reason,
     )
 
@@ -710,7 +812,13 @@ def _run_live_web_tool_loop(
     spent_usd: float,
     retrieval_base_cost_usd: float,
     retrieval_brave_cost_usd: float,
+    retrieval_exa_cost_usd: float,
     brave_request_count: int,
+    exa_web_request_count: int,
+    exa_answer_request_count: int,
+    exa_research_request_count: int,
+    exa_content_request_count: int,
+    exa_content_piece_count: int,
     stages: list[TraceStage],
     observability: RunObservability,
 ) -> LiveWebFetchResult:
@@ -732,7 +840,13 @@ def _run_live_web_tool_loop(
             spent_usd=spent_usd,
             retrieval_base_cost_usd=retrieval_base_cost_usd,
             retrieval_brave_cost_usd=retrieval_brave_cost_usd,
+            retrieval_exa_cost_usd=retrieval_exa_cost_usd,
             brave_request_count=brave_request_count,
+            exa_web_request_count=exa_web_request_count,
+            exa_answer_request_count=exa_answer_request_count,
+            exa_research_request_count=exa_research_request_count,
+            exa_content_request_count=exa_content_request_count,
+            exa_content_piece_count=exa_content_piece_count,
         )
 
     seed_records = _dedupe_records(records)[: _env_int("SPARKIT_LIVE_WEB_SEED_DOCS", 8, minimum=1)]
@@ -760,13 +874,24 @@ def _run_live_web_tool_loop(
             spent_usd=spent_usd,
             retrieval_base_cost_usd=retrieval_base_cost_usd,
             retrieval_brave_cost_usd=retrieval_brave_cost_usd,
+            retrieval_exa_cost_usd=retrieval_exa_cost_usd,
             brave_request_count=brave_request_count,
+            exa_web_request_count=exa_web_request_count,
+            exa_answer_request_count=exa_answer_request_count,
+            exa_research_request_count=exa_research_request_count,
+            exa_content_request_count=exa_content_request_count,
+            exa_content_piece_count=exa_content_piece_count,
         )
 
     stage_start = datetime.now(timezone.utc)
     fetched: list[LiteratureRecord] = []
     aggregate_errors: dict[str, str] = {}
     stage_brave_requests = 0
+    stage_exa_web_requests = 0
+    stage_exa_answer_requests = 0
+    stage_exa_research_requests = 0
+    stage_exa_content_requests = 0
+    stage_exa_content_pieces = 0
     per_query_results: dict[str, int] = {}
     for query in tool_queries:
         found, errors, stats = search_literature(query, max_results=max_results, force_web=True)
@@ -775,16 +900,34 @@ def _run_live_web_tool_loop(
         per_query_results[query] = len(deduped_found)
         for source, err in errors.items():
             aggregate_errors[f"live_web:{source}:{query}"] = err
-        stage_brave_requests += int((stats.get("requests_by_source") or {}).get("brave_web", 0))
+        requests_by_source = stats.get("requests_by_source") or {}
+        stage_brave_requests += int(requests_by_source.get("brave_web", 0))
+        stage_exa_web_requests += int(requests_by_source.get("exa_web", 0))
+        stage_exa_answer_requests += int(requests_by_source.get("exa_answer", 0))
+        stage_exa_research_requests += int(requests_by_source.get("exa_research", 0))
+        stage_exa_content_requests += int(requests_by_source.get("exa_content", 0))
+        stage_exa_content_pieces += int(stats.get("exa_content_pieces", 0))
 
     merged_records = _dedupe_records([*records, *_dedupe_records(fetched)])
     stage_base_cost = estimate_stage_cost("retrieval", units=len(tool_queries))
     stage_brave_cost = estimate_brave_search_cost(stage_brave_requests)
-    stage_cost = stage_base_cost + stage_brave_cost
+    stage_exa_cost = estimate_exa_cost(
+        search_requests_1_25=stage_exa_web_requests,
+        content_pieces=stage_exa_content_pieces,
+        answer_requests=stage_exa_answer_requests,
+        research_search_requests=stage_exa_research_requests,
+    )
+    stage_cost = stage_base_cost + stage_brave_cost + stage_exa_cost
     spent_usd += stage_cost
     retrieval_base_cost_usd += stage_base_cost
     retrieval_brave_cost_usd += stage_brave_cost
+    retrieval_exa_cost_usd += stage_exa_cost
     brave_request_count += stage_brave_requests
+    exa_web_request_count += stage_exa_web_requests
+    exa_answer_request_count += stage_exa_answer_requests
+    exa_research_request_count += stage_exa_research_requests
+    exa_content_request_count += stage_exa_content_requests
+    exa_content_piece_count += stage_exa_content_pieces
 
     observability.add_stage(
         StageMetric(
@@ -811,6 +954,12 @@ def _run_live_web_tool_loop(
                 "source_errors": aggregate_errors,
                 "brave_requests": stage_brave_requests,
                 "brave_cost_usd": stage_brave_cost,
+                "exa_search_requests": stage_exa_web_requests,
+                "exa_answer_requests": stage_exa_answer_requests,
+                "exa_research_requests": stage_exa_research_requests,
+                "exa_content_requests": stage_exa_content_requests,
+                "exa_content_pieces": stage_exa_content_pieces,
+                "exa_cost_usd": stage_exa_cost,
                 "estimated_cost_usd": stage_cost,
             },
         )
@@ -822,7 +971,13 @@ def _run_live_web_tool_loop(
         spent_usd=spent_usd,
         retrieval_base_cost_usd=retrieval_base_cost_usd,
         retrieval_brave_cost_usd=retrieval_brave_cost_usd,
+        retrieval_exa_cost_usd=retrieval_exa_cost_usd,
         brave_request_count=brave_request_count,
+        exa_web_request_count=exa_web_request_count,
+        exa_answer_request_count=exa_answer_request_count,
+        exa_research_request_count=exa_research_request_count,
+        exa_content_request_count=exa_content_request_count,
+        exa_content_piece_count=exa_content_piece_count,
     )
 
 
@@ -1231,21 +1386,82 @@ def _run_synthesis_phase(
                 max_tokens=min(420, synthesis_token_budget or 420),
             )
             parsed_scores = _parse_mcq_option_scores(scorer_result.text or "", answer_choices)
+            if not parsed_scores:
+                stages.append(
+                    TraceStage(
+                        name="mcq_parse_failure",
+                        status=Status.COMPLETED,
+                        model=provider_plan.synthesis,
+                        started_at=datetime.now(timezone.utc),
+                        ended_at=datetime.now(timezone.utc),
+                        artifacts={
+                            "source": "mcq_option_scorer",
+                            "reason": "parsed_scores_empty",
+                            "raw_output": (scorer_result.text or "")[:1200],
+                        },
+                    )
+                )
+            secondary_scores: dict[str, dict[str, float]] = {}
+            secondary_result = None
+            dual_scorer_enabled = _env_bool("SPARKIT_ENABLE_MCQ_DUAL_SCORER", True)
+            if dual_scorer_enabled:
+                secondary_prompt = (
+                    "Apply an adversarial pass: focus on why each option could be wrong before scoring.\n"
+                    f"{scorer_prompt}"
+                )
+                secondary_result = generate_text(
+                    provider_plan.synthesis,
+                    secondary_prompt,
+                    max_tokens=min(420, synthesis_token_budget or 420),
+                )
+                secondary_scores = _parse_mcq_option_scores((secondary_result.text or ""), answer_choices)
+                if not secondary_scores:
+                    stages.append(
+                        TraceStage(
+                            name="mcq_parse_failure",
+                            status=Status.COMPLETED,
+                            model=provider_plan.synthesis,
+                            started_at=datetime.now(timezone.utc),
+                            ended_at=datetime.now(timezone.utc),
+                            artifacts={
+                                "source": "mcq_option_scorer_secondary",
+                                "reason": "parsed_scores_empty",
+                                "raw_output": ((secondary_result.text or "")[:1200] if secondary_result else ""),
+                            },
+                        )
+                    )
             lexical_scores = _mcq_lexical_option_scores(
                 answer_choices=answer_choices,
                 claim_texts=claim_texts,
                 section_summaries=section_summaries,
             )
+            dossier_scores = {
+                label: float((option_dossiers.get(label, {}) if isinstance(option_dossiers.get(label, {}), dict) else {}).get("dossier_score", 0.0))
+                for label in sorted(answer_choices.keys())
+            }
+            max_dossier = max([0.0, *dossier_scores.values()])
             blended_scores: dict[str, dict[str, float]] = {}
             for label in sorted(answer_choices.keys()):
                 llm = parsed_scores.get(label, {"support": 0.0, "contradiction": 0.0, "net": 0.0})
+                llm_secondary = secondary_scores.get(label, {"support": 0.0, "contradiction": 0.0, "net": 0.0})
                 lex = lexical_scores.get(label, {"lexical": 0.0})
-                blended = 0.7 * float(llm["net"]) + 0.3 * float(lex["lexical"])
+                dossier_norm = (dossier_scores.get(label, 0.0) / max(1e-9, max_dossier)) if max_dossier > 0 else 0.0
+                llm_net = float(llm["net"])
+                llm2_net = float(llm_secondary["net"])
+                blended = (
+                    0.45 * llm_net
+                    + 0.20 * llm2_net
+                    + 0.20 * float(lex["lexical"])
+                    + 0.15 * dossier_norm
+                )
                 blended_scores[label] = {
                     "support": float(llm["support"]),
                     "contradiction": float(llm["contradiction"]),
                     "net": float(llm["net"]),
+                    "secondary_net": llm2_net,
                     "lexical": float(lex["lexical"]),
+                    "dossier_score": dossier_scores.get(label, 0.0),
+                    "dossier_norm": dossier_norm,
                     "blended": blended,
                 }
             selected_letter: str | None = None
@@ -1285,6 +1501,7 @@ def _run_synthesis_phase(
                             "selected_option": selected_letter,
                             "num_choices": len(answer_choices),
                             "option_scores": parsed_scores,
+                            "secondary_option_scores": secondary_scores,
                             "lexical_scores": lexical_scores,
                             "blended_scores": blended_scores,
                             "allowed_labels": allowed_labels,
@@ -1294,6 +1511,7 @@ def _run_synthesis_phase(
                             "option_dossiers": option_dossiers,
                             "dossier_selected": dossier_selected,
                             "scorer_raw_output": (scorer_result.text or "")[:2000],
+                            "secondary_scorer_raw_output": ((secondary_result.text or "")[:2000] if secondary_result else ""),
                         },
                     )
                 )
@@ -1341,6 +1559,21 @@ def _run_synthesis_phase(
                         )
                     )
                 else:
+                    if not _extract_answer_letter(judge_result.text or ""):
+                        stages.append(
+                            TraceStage(
+                                name="mcq_parse_failure",
+                                status=Status.COMPLETED,
+                                model=provider_plan.synthesis,
+                                started_at=datetime.now(timezone.utc),
+                                ended_at=datetime.now(timezone.utc),
+                                artifacts={
+                                    "source": "mcq_option_judge",
+                                    "reason": "missing_or_invalid_answer_tag",
+                                    "raw_output": (judge_result.text or "")[:1200],
+                                },
+                            )
+                        )
                     synthesis_failures.append(
                         f"{provider_plan.synthesis}: mcq_judge_failed ({judge_result.error or 'invalid output'})"
                     )
@@ -1377,19 +1610,51 @@ def _run_synthesis_phase(
             # Guarantee a parseable MCQ output even when provider calls degrade.
             candidate = draft_texts[0] if draft_texts else ""
             if not _extract_answer_letter(candidate):
-                lexical_scores = _mcq_lexical_option_scores(
+                arbitration_enabled = _env_bool("SPARKIT_ENABLE_MCQ_ARBITRATION_FALLBACK", True)
+                arbitration_selected: str | None = None
+                if arbitration_enabled:
+                    arbitration_prompt = _build_mcq_arbitration_prompt(
+                        question=stem_question,
+                        answer_choices=answer_choices,
+                        allowed_labels=allowed_labels,
+                        option_dossiers=option_dossiers,
+                        blended_scores=blended_scores,
+                        lexical_scores=lexical_scores,
+                    )
+                    arbitration_result = generate_text(
+                        provider_plan.synthesis,
+                        arbitration_prompt,
+                        max_tokens=min(180, synthesis_token_budget or 180),
+                    )
+                    parsed = _extract_answer_letter(arbitration_result.text or "")
+                    if parsed and parsed in allowed_labels:
+                        arbitration_selected = parsed
+                    else:
+                        stages.append(
+                            TraceStage(
+                                name="mcq_parse_failure",
+                                status=Status.COMPLETED,
+                                model=provider_plan.synthesis,
+                                started_at=datetime.now(timezone.utc),
+                                ended_at=datetime.now(timezone.utc),
+                                artifacts={
+                                    "source": "mcq_arbitration_fallback",
+                                    "reason": "missing_or_invalid_answer_tag",
+                                    "raw_output": (arbitration_result.text or "")[:1200],
+                                },
+                            )
+                        )
+                selected_letter = arbitration_selected or _fallback_option_from_signals(
+                    question=stem_question,
+                    allowed_labels=allowed_labels,
                     answer_choices=answer_choices,
-                    claim_texts=claim_texts,
-                    section_summaries=section_summaries,
+                    option_dossiers=option_dossiers,
+                    blended_scores=blended_scores,
+                    lexical_scores=lexical_scores,
                 )
-                selected_letter = (
-                    max(
-                        lexical_scores.items(),
-                        key=lambda item: float(item[1].get("lexical", 0.0)),
-                    )[0]
-                    if lexical_scores
-                    else sorted(answer_choices.keys())[0]
-                )
+                if not selected_letter:
+                    # Last-resort deterministic tie-break without alphabetical bias.
+                    selected_letter = _deterministic_tiebreak_option(stem_question, sorted(answer_choices.keys())) or "A"
                 draft = f"<answer>{selected_letter}</answer>"
                 draft_texts = [draft]
                 _record_gen_usage(provider_plan.synthesis, provider_plan.synthesis, draft)
@@ -1403,6 +1668,9 @@ def _run_synthesis_phase(
                         artifacts={
                             "selected_option": selected_letter,
                             "reason": "missing_or_unparseable_mcq_answer",
+                            "arbitration_enabled": arbitration_enabled,
+                            "arbitration_used": bool(arbitration_selected),
+                            "allowed_labels": allowed_labels,
                         },
                     )
                 )
@@ -1740,6 +2008,52 @@ def _finalize_answer_and_quality_gates(
         evidence_count=len(evidence.selected_records),
     )
     answer_conf, calibrated_claims = calibrate_answer(features, adjusted_claim_conf)
+    consensus = _evidence_consensus_profile(evidence.selected_records)
+    independent_hq_sources = int(consensus.get("independent_hq_sources", 0.0))
+    consensus_score = float(consensus.get("consensus_score", 0.0))
+    consensus_penalty = 0.0
+    if independent_hq_sources < 2:
+        consensus_penalty += 0.10
+    if consensus_score < 0.45:
+        consensus_penalty += 0.08
+    if verifier_result.contradiction_flags >= 3 and consensus_score < 0.55:
+        consensus_penalty += 0.05
+    if consensus_penalty > 0:
+        answer_conf = max(0.05, answer_conf - consensus_penalty)
+        for claim_id in list(calibrated_claims.keys()):
+            calibrated_claims[claim_id] = max(0.05, min(0.95, calibrated_claims[claim_id] - (consensus_penalty * 0.5)))
+        stages.append(
+            TraceStage(
+                name="evidence_consensus_gate",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "applied": True,
+                    "penalty": round(consensus_penalty, 4),
+                    "independent_hq_sources": independent_hq_sources,
+                    "consensus_score": round(consensus_score, 4),
+                    "contradiction_flags": verifier_result.contradiction_flags,
+                },
+            )
+        )
+    else:
+        stages.append(
+            TraceStage(
+                name="evidence_consensus_gate",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={
+                    "applied": False,
+                    "penalty": 0.0,
+                    "independent_hq_sources": independent_hq_sources,
+                    "consensus_score": round(consensus_score, 4),
+                },
+            )
+        )
     CalibrationStore().upsert_features(
         run_id=context.run_id,
         features=features_to_dict(features),
@@ -1762,6 +2076,10 @@ def _finalize_answer_and_quality_gates(
         uncertainty_reasons.append("One or more provider generation calls failed; fallback synthesis used")
     if budget.budget_stop_reason:
         uncertainty_reasons.append(budget.budget_stop_reason)
+    if independent_hq_sources < 2:
+        uncertainty_reasons.append("Insufficient independent high-quality sources for decisive claims")
+    if consensus_score < 0.45:
+        uncertainty_reasons.append("Evidence consensus across sources is weak")
     uncertainty_reasons.extend(verifier_result.notes)
 
     abstain_reason_codes = _abstain_reasons(
@@ -1771,6 +2089,8 @@ def _finalize_answer_and_quality_gates(
         unsupported_claims=evidence.unsupported_claims,
         contradiction_flags=verifier_result.contradiction_flags,
         synthesis_failures=synthesis_failures,
+        independent_hq_sources=independent_hq_sources,
+        consensus_score=consensus_score,
     )
     should_abstain = len(abstain_reason_codes) >= 2
     disable_hard_abstain = _env_bool("SPARKIT_DISABLE_HARD_ABSTAIN", False)
@@ -1868,6 +2188,26 @@ def _finalize_answer_and_quality_gates(
             )
         )
 
+    mcq_gate_passed, mcq_gate_artifacts = _mcq_selected_option_evidence_gate(
+        question=context.question,
+        final_text=final_text,
+        stages=stages,
+    )
+    if not mcq_gate_passed:
+        penalty = _env_float("SPARKIT_MCQ_EVIDENCE_GATE_CONF_PENALTY", 0.20, minimum=0.0)
+        answer_conf = max(0.05, answer_conf - penalty)
+        uncertainty_reasons.append("Selected MCQ option lacks strong supporting passages")
+    stages.append(
+        TraceStage(
+            name="mcq_evidence_gate",
+            status=Status.COMPLETED,
+            model="policy",
+            started_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(timezone.utc),
+            artifacts={**mcq_gate_artifacts, "phase": "finalization"},
+        )
+    )
+
     answer = Answer(
         final_text=final_text,
         answer_confidence=answer_conf,
@@ -1906,6 +2246,46 @@ def _finalize_answer_and_quality_gates(
                 cost_usd=budget.retrieval_brave_cost_usd,
             )
         )
+    if budget.exa_web_request_count > 0:
+        provider_usage.append(
+            ProviderUsage(
+                provider="exa_web",
+                model="search-api",
+                tokens_input=0,
+                tokens_output=0,
+                cost_usd=estimate_exa_cost(search_requests_1_25=budget.exa_web_request_count),
+            )
+        )
+    if budget.exa_answer_request_count > 0:
+        provider_usage.append(
+            ProviderUsage(
+                provider="exa_answer",
+                model="answer-api",
+                tokens_input=0,
+                tokens_output=0,
+                cost_usd=estimate_exa_cost(answer_requests=budget.exa_answer_request_count),
+            )
+        )
+    if budget.exa_research_request_count > 0:
+        provider_usage.append(
+            ProviderUsage(
+                provider="exa_research",
+                model="research-api",
+                tokens_input=0,
+                tokens_output=0,
+                cost_usd=estimate_exa_cost(research_search_requests=budget.exa_research_request_count),
+            )
+        )
+    if budget.exa_content_piece_count > 0:
+        provider_usage.append(
+            ProviderUsage(
+                provider="exa_content",
+                model="contents-api",
+                tokens_input=0,
+                tokens_output=0,
+                cost_usd=estimate_exa_cost(content_pieces=budget.exa_content_piece_count),
+            )
+        )
 
     return FinalizationResult(answer=answer, quality_gates=quality_gates, provider_usage=provider_usage)
 
@@ -1936,6 +2316,113 @@ def _record_relevance_score(question: str, record: LiteratureRecord, boost_terms
     return 2.0 * overlap_title + 1.0 * overlap_abstract + 0.25 * recency_bonus
 
 
+def _record_source_quality_score(record: LiteratureRecord) -> float:
+    source = (record.source or "").lower()
+    source_base = {
+        "arxiv": 1.0,
+        "crossref": 1.15,
+        "semantic_scholar": 1.10,
+        "openalex": 1.10,
+        "europe_pmc": 1.20,
+        "exa_web": 0.95,
+        "exa_answer": 0.95,
+        "exa_research": 1.05,
+        "exa_content": 1.05,
+        "brave_web": 0.80,
+        "local_corpus": 0.90,
+    }.get(source, 0.85)
+
+    host = ""
+    if record.url:
+        try:
+            host = urlparse(record.url).netloc.lower()
+        except Exception:  # noqa: BLE001
+            host = ""
+    host_bonus = 0.0
+    if host and any(host == suffix or host.endswith(f".{suffix}") or host.endswith(suffix) for suffix in _HIGH_QUALITY_HOST_SUFFIXES):
+        host_bonus = 0.55
+
+    text_blob = f"{record.title} {record.abstract or ''}".lower()
+    method_hits = sum(1 for term in _METHOD_SIGNAL_TERMS if term in text_blob)
+    method_bonus = min(0.45, method_hits * 0.12)
+
+    recency_bonus = 0.0
+    if isinstance(record.year, int):
+        recency_bonus = max(0.0, min(0.25, (record.year - 2016) * 0.03))
+
+    return source_base + host_bonus + method_bonus + recency_bonus
+
+
+def _record_priority_score(question: str, record: LiteratureRecord, boost_terms: list[str] | None = None) -> float:
+    relevance = _record_relevance_score(question, record, boost_terms)
+    quality = _record_source_quality_score(record)
+    quality_weight = _env_float("SPARKIT_SOURCE_QUALITY_WEIGHT", 1.10, minimum=0.0)
+    return relevance + (quality_weight * quality)
+
+
+def _evidence_consensus_profile(records: list[LiteratureRecord]) -> dict[str, float]:
+    if not records:
+        return {
+            "independent_hq_sources": 0.0,
+            "cluster_size": 0.0,
+            "high_quality_records": 0.0,
+            "consensus_score": 0.0,
+        }
+
+    hq_threshold = _env_float("SPARKIT_HQ_SOURCE_THRESHOLD", 1.70, minimum=0.0)
+    clusters: dict[str, dict[str, object]] = {}
+
+    for record in records:
+        text = f"{record.title}".lower()
+        tokens = [
+            token
+            for token in _tokenize(text)
+            if token not in _STOPWORDS and len(token) >= 5
+        ]
+        fallback = ""
+        if isinstance(record.title, str) and record.title:
+            fallback = record.title.lower()[:40]
+        elif isinstance(record.url, str) and record.url:
+            fallback = record.url.lower()
+        cluster_key = " ".join(sorted(tokens)[:5]) or fallback or "unknown"
+        bucket = clusters.setdefault(
+            cluster_key,
+            {
+                "records": 0,
+                "hq_records": 0,
+                "hosts": set(),
+            },
+        )
+        bucket["records"] = int(bucket["records"]) + 1
+        if _record_source_quality_score(record) >= hq_threshold:
+            bucket["hq_records"] = int(bucket["hq_records"]) + 1
+        host = ""
+        if record.url:
+            try:
+                host = urlparse(record.url).netloc.lower()
+            except Exception:  # noqa: BLE001
+                host = ""
+        if host:
+            cast_hosts = bucket["hosts"]
+            if isinstance(cast_hosts, set):
+                cast_hosts.add(host)
+
+    best_cluster = max(
+        clusters.values(),
+        key=lambda item: (int(item["hq_records"]), int(item["records"]), len(item["hosts"] if isinstance(item["hosts"], set) else set())),
+    )
+    independent_hq_sources = float(len(best_cluster["hosts"] if isinstance(best_cluster["hosts"], set) else set()))
+    cluster_size = float(int(best_cluster["records"]))
+    high_quality_records = float(int(best_cluster["hq_records"]))
+    consensus_score = min(1.0, independent_hq_sources / 2.0) * 0.7 + min(1.0, cluster_size / 4.0) * 0.3
+    return {
+        "independent_hq_sources": independent_hq_sources,
+        "cluster_size": cluster_size,
+        "high_quality_records": high_quality_records,
+        "consensus_score": consensus_score,
+    }
+
+
 def _select_records_for_ingestion(
     question: str,
     records: list[LiteratureRecord],
@@ -1946,7 +2433,7 @@ def _select_records_for_ingestion(
         return []
     scored = sorted(
         records,
-        key=lambda item: (_record_relevance_score(question, item, boost_terms), item.year or 0, len(item.title)),
+        key=lambda item: (_record_priority_score(question, item, boost_terms), item.year or 0, len(item.title)),
         reverse=True,
     )
 
@@ -1973,7 +2460,7 @@ def _select_records_for_ingestion(
             rid = _record_identity(record)
             if rid in selected_keys:
                 continue
-            base = _record_relevance_score(question, record, boost_terms)
+            base = _record_priority_score(question, record, boost_terms)
             title_tokens = set(_tokenize(record.title))
             novelty_penalty = 0.0
             if selected:
@@ -2005,6 +2492,8 @@ def _abstain_reasons(
     unsupported_claims: int,
     contradiction_flags: int,
     synthesis_failures: list[str],
+    independent_hq_sources: int,
+    consensus_score: float,
 ) -> list[str]:
     reasons: list[str] = []
     if retrieved_count < max(2, min_sources // 2):
@@ -2015,6 +2504,10 @@ def _abstain_reasons(
         reasons.append("unsupported_claims_high")
     if contradiction_flags >= 4 and support_coverage < 0.60:
         reasons.append("high_contradiction_with_weak_support")
+    if independent_hq_sources < 2:
+        reasons.append("insufficient_independent_high_quality_sources")
+    if consensus_score < 0.40:
+        reasons.append("evidence_consensus_weak")
     if synthesis_failures:
         reasons.append("synthesis_generation_instability")
     return reasons
@@ -2093,6 +2586,76 @@ def _should_trigger_confidence_retry(
         if not _extract_answer_letter(candidate):
             reasons.append("mcq_answer_letter_missing")
     return (len(reasons) > 0), reasons
+
+
+def _mcq_selected_option_evidence_gate(
+    *,
+    question: str,
+    final_text: str,
+    stages: list[TraceStage],
+) -> tuple[bool, dict[str, object]]:
+    artifacts: dict[str, object] = {
+        "enabled": _env_bool("SPARKIT_ENABLE_MCQ_EVIDENCE_GATE", True),
+        "is_mcq": _question_has_answer_choices(question),
+        "selected_option": None,
+        "passed": True,
+        "reason": "not_applicable",
+        "support_snippets": 0,
+        "counter_snippets": 0,
+        "dossier_score": 0.0,
+        "net_score": 0.0,
+    }
+    if not artifacts["enabled"] or not artifacts["is_mcq"]:
+        return True, artifacts
+
+    selected = _extract_answer_letter(final_text or "")
+    artifacts["selected_option"] = selected
+    if not selected:
+        artifacts["passed"] = False
+        artifacts["reason"] = "missing_answer_letter"
+        return False, artifacts
+
+    stage_artifacts = _latest_stage_artifacts(stages, "mcq_option_scorer")
+    if not stage_artifacts:
+        stage_artifacts = _latest_stage_artifacts(stages, "mcq_option_judge")
+
+    dossiers = stage_artifacts.get("option_dossiers")
+    option_scores = stage_artifacts.get("option_scores")
+    if not isinstance(dossiers, dict):
+        dossiers = {}
+    if not isinstance(option_scores, dict):
+        option_scores = {}
+
+    row = dossiers.get(selected, {}) if isinstance(dossiers, dict) else {}
+    if not isinstance(row, dict):
+        row = {}
+    support_snippets = row.get("support_snippets") or []
+    counter_snippets = row.get("counter_snippets") or []
+    dossier_score = float(row.get("dossier_score", 0.0))
+    score_row = option_scores.get(selected, {}) if isinstance(option_scores, dict) else {}
+    net_score = float((score_row.get("net", 0.0) if isinstance(score_row, dict) else 0.0) or 0.0)
+
+    support_count = len(support_snippets) if isinstance(support_snippets, list) else 0
+    counter_count = len(counter_snippets) if isinstance(counter_snippets, list) else 0
+    artifacts["support_snippets"] = support_count
+    artifacts["counter_snippets"] = counter_count
+    artifacts["dossier_score"] = dossier_score
+    artifacts["net_score"] = net_score
+
+    min_support = _env_int("SPARKIT_MCQ_EVIDENCE_MIN_SUPPORT_SNIPPETS", 2, minimum=0)
+    min_dossier = _env_float("SPARKIT_MCQ_EVIDENCE_MIN_DOSSIER_SCORE", 1.8, minimum=0.0)
+    min_net = _env_float("SPARKIT_MCQ_EVIDENCE_MIN_NET_SCORE", 0.0, minimum=-1.0)
+
+    passed = (support_count >= min_support) and (dossier_score >= min_dossier) and (net_score >= min_net)
+    artifacts["passed"] = passed
+    if passed:
+        artifacts["reason"] = "ok"
+    else:
+        artifacts["reason"] = "insufficient_support_for_selected_option"
+        artifacts["min_support_snippets"] = min_support
+        artifacts["min_dossier_score"] = min_dossier
+        artifacts["min_net_score"] = min_net
+    return passed, artifacts
 
 
 def _select_best_parallel_draft(question: str, drafts: list[str]) -> str:
@@ -2259,6 +2822,106 @@ def _select_confident_blended_option(
     if (top_row["blended"] - second_row["blended"]) < min_margin:
         return None
     return top_label
+
+
+def _deterministic_tiebreak_option(question: str, labels: list[str]) -> str | None:
+    if not labels:
+        return None
+    seed = abs(hash(question or ""))
+    idx = seed % len(labels)
+    return sorted(labels)[idx]
+
+
+def _fallback_option_from_signals(
+    *,
+    question: str,
+    allowed_labels: list[str],
+    answer_choices: dict[str, str],
+    option_dossiers: dict[str, dict[str, object]] | None,
+    blended_scores: dict[str, dict[str, float]] | None,
+    lexical_scores: dict[str, dict[str, float]] | None,
+) -> str | None:
+    labels = [label for label in sorted(answer_choices.keys()) if label in set(allowed_labels)]
+    if not labels:
+        labels = sorted(answer_choices.keys())
+    if not labels:
+        return None
+
+    dossier_scores = {}
+    for label in labels:
+        row = (option_dossiers or {}).get(label, {})
+        dossier_scores[label] = float(row.get("dossier_score", 0.0)) if isinstance(row, dict) else 0.0
+    max_dossier = max(dossier_scores.values()) if dossier_scores else 0.0
+    winners = [label for label, score in dossier_scores.items() if score == max_dossier and score > 0.0]
+    if len(winners) == 1:
+        return winners[0]
+
+    blended = {}
+    for label in labels:
+        row = (blended_scores or {}).get(label, {})
+        blended[label] = float(row.get("blended", 0.0)) if isinstance(row, dict) else 0.0
+    max_blended = max(blended.values()) if blended else 0.0
+    bwinners = [label for label, score in blended.items() if score == max_blended and score > 0.0]
+    if len(bwinners) == 1:
+        return bwinners[0]
+
+    lex = {}
+    for label in labels:
+        row = (lexical_scores or {}).get(label, {})
+        lex[label] = float(row.get("lexical", 0.0)) if isinstance(row, dict) else 0.0
+    max_lex = max(lex.values()) if lex else 0.0
+    lwinners = [label for label, score in lex.items() if score == max_lex and score > 0.0]
+    if len(lwinners) == 1:
+        return lwinners[0]
+
+    # Avoid deterministic bias toward alphabetical-first labels (e.g., repeated 'A').
+    return _deterministic_tiebreak_option(question, labels)
+
+
+def _question_domain(question: str) -> str:
+    lowered = (question or "").lower()
+    chem_markers = {
+        "reaction",
+        "reagent",
+        "catalyst",
+        "enantio",
+        "stereochem",
+        "nmr",
+        "mechanism",
+        "substrate",
+        "product",
+        "bromination",
+    }
+    bio_markers = {
+        "cell",
+        "protein",
+        "gene",
+        "rna",
+        "expression",
+        "clinical",
+        "patient",
+        "disease",
+        "assay",
+        "immune",
+    }
+    chem_hits = sum(1 for marker in chem_markers if marker in lowered)
+    bio_hits = sum(1 for marker in bio_markers if marker in lowered)
+    if chem_hits >= max(2, bio_hits + 1):
+        return "chemistry"
+    if bio_hits >= max(2, chem_hits + 1):
+        return "biology_medicine"
+    return "general_stem"
+
+
+def _domain_mcq_guidance(question: str) -> str:
+    domain = _question_domain(question)
+    if domain == "chemistry":
+        return (
+            "Check mechanism feasibility, stereochemistry, regioselectivity, and whether conditions/reagents imply the option."
+        )
+    if domain == "biology_medicine":
+        return "Check directionality of biological effect, assay/population fit, and mechanistic plausibility."
+    return "Check direct evidence support, contradiction burden, and methodological consistency."
 
 
 def _latest_stage_artifacts(stages: list[TraceStage], name: str) -> dict[str, object]:
@@ -3472,9 +4135,17 @@ def _build_synthesis_prompt(
     section_lines = "\n".join(
         f"- {row['section']}: {row['summary']}" for row in (section_summaries or [])[:4]
     ) or "- No section summaries available."
+    domain = _question_domain(question)
+    if domain == "chemistry":
+        domain_hint = "Prioritize mechanistic consistency, stereochemistry/regiochemistry, and reaction-condition constraints."
+    elif domain == "biology_medicine":
+        domain_hint = "Prioritize causal biological plausibility, assay/population context, and confounders."
+    else:
+        domain_hint = "Prioritize methodological rigor, internal consistency, and falsification checks."
     if _question_has_answer_choices(question):
         return (
             "You are a scientific QA synthesizer. Use only the provided evidence bullets.\n"
+            f"Domain guidance: {domain_hint}\n"
             f"Question: {question}\n"
             "Claim clusters:\n"
             f"{cluster_lines}\n"
@@ -3489,6 +4160,7 @@ def _build_synthesis_prompt(
 
     return (
         "You are a scientific QA synthesizer. Use only the provided evidence bullets.\n"
+        f"Domain guidance: {domain_hint}\n"
         f"Question: {question}\n"
         "Claim clusters:\n"
         f"{cluster_lines}\n"
@@ -3525,8 +4197,10 @@ def _build_mcq_option_judge_prompt(
         counter = " | ".join((pack.get("counter_snippets", []) if isinstance(pack, dict) else [])[:2]) if isinstance(pack, dict) else ""
         option_pack_lines.append(f"- {label}. {text}\n  support: {support}\n  counter: {counter or 'none'}")
     option_pack_block = "\n".join(option_pack_lines)
+    domain_hint = _domain_mcq_guidance(stem)
     return (
         "You are a rigorous STEM MCQ adjudicator.\n"
+        f"Domain guidance: {domain_hint}\n"
         "Use only the provided evidence to choose the best option.\n"
         "If evidence is weak, still pick the most supported option.\n"
         "Return ONLY one XML tag.\n"
@@ -3570,8 +4244,10 @@ def _build_mcq_option_scoring_prompt(
         counter = " | ".join((pack.get("counter_snippets", []) if isinstance(pack, dict) else [])[:2]) if isinstance(pack, dict) else ""
         option_pack_lines.append(f"- {label}. {text}\n  support: {support}\n  counter: {counter or 'none'}")
     option_pack_block = "\n".join(option_pack_lines)
+    domain_hint = _domain_mcq_guidance(stem)
     return (
         "You are a strict STEM MCQ evidence scorer.\n"
+        f"Domain guidance: {domain_hint}\n"
         "For each choice, score how well evidence supports it and contradicts it.\n"
         "Use only the evidence below.\n"
         "Output exactly one line per choice in this format:\n"
@@ -3590,6 +4266,47 @@ def _build_mcq_option_scoring_prompt(
         f"{option_pack_block}\n"
         "Evidence:\n"
         f"{evidence_lines}\n"
+    )
+
+
+def _build_mcq_arbitration_prompt(
+    *,
+    question: str,
+    answer_choices: dict[str, str],
+    allowed_labels: list[str],
+    option_dossiers: dict[str, object] | None,
+    blended_scores: dict[str, dict[str, float]] | None,
+    lexical_scores: dict[str, dict[str, float]] | None,
+) -> str:
+    stem, _ = _split_question_and_choices(question)
+    labels = [label for label in sorted(answer_choices.keys()) if label in set(allowed_labels)] or sorted(answer_choices.keys())
+    choices_block = "\n".join(f"{label}. {answer_choices.get(label,'')}" for label in labels)
+    lines: list[str] = []
+    for label in labels:
+        dossier = (option_dossiers or {}).get(label, {})
+        support = (dossier.get("support_snippets") or [])[:2] if isinstance(dossier, dict) else []
+        counter = (dossier.get("counter_snippets") or [])[:2] if isinstance(dossier, dict) else []
+        dscore = float((dossier.get("dossier_score", 0.0) if isinstance(dossier, dict) else 0.0) or 0.0)
+        braw = ((blended_scores or {}).get(label, {}) or {}).get("blended", 0.0)
+        lraw = ((lexical_scores or {}).get(label, {}) or {}).get("lexical", 0.0)
+        bscore = float(braw or 0.0)
+        lscore = float(lraw or 0.0)
+        lines.append(
+            f"{label}: dossier={dscore:.3f}, blended={bscore:.3f}, lexical={lscore:.3f}, "
+            f"support={'; '.join(support) if support else 'none'}, counter={'; '.join(counter) if counter else 'none'}"
+        )
+    packed = "\n".join(lines)
+    return (
+        "You are a strict arbitration step for a STEM multiple-choice question.\n"
+        "Choose one final option based on the evidence signals below.\n"
+        "Do NOT default to A. If tied/uncertain, choose the option with stronger support snippets and lower contradiction.\n"
+        "Return only one XML line exactly: <answer>X</answer>\n\n"
+        f"Question stem: {stem}\n"
+        f"Allowed labels: {', '.join(labels)}\n"
+        "Choices:\n"
+        f"{choices_block}\n\n"
+        "Signals:\n"
+        f"{packed}\n"
     )
 
 
@@ -3734,7 +4451,13 @@ def execute_orchestration(
     spent_usd = retrieval_result.spent_usd
     retrieval_base_cost_usd = retrieval_result.retrieval_base_cost_usd
     retrieval_brave_cost_usd = retrieval_result.retrieval_brave_cost_usd
+    retrieval_exa_cost_usd = retrieval_result.retrieval_exa_cost_usd
     brave_request_count = retrieval_result.brave_request_count
+    exa_web_request_count = retrieval_result.exa_web_request_count
+    exa_answer_request_count = retrieval_result.exa_answer_request_count
+    exa_research_request_count = retrieval_result.exa_research_request_count
+    exa_content_request_count = retrieval_result.exa_content_request_count
+    exa_content_piece_count = retrieval_result.exa_content_piece_count
     budget_stop_reason = retrieval_result.budget_stop_reason
     live_web_result = _run_live_web_tool_loop(
         question=question,
@@ -3745,14 +4468,26 @@ def execute_orchestration(
         spent_usd=spent_usd,
         retrieval_base_cost_usd=retrieval_base_cost_usd,
         retrieval_brave_cost_usd=retrieval_brave_cost_usd,
+        retrieval_exa_cost_usd=retrieval_exa_cost_usd,
         brave_request_count=brave_request_count,
+        exa_web_request_count=exa_web_request_count,
+        exa_answer_request_count=exa_answer_request_count,
+        exa_research_request_count=exa_research_request_count,
+        exa_content_request_count=exa_content_request_count,
+        exa_content_piece_count=exa_content_piece_count,
         stages=stages,
         observability=observability,
     )
     spent_usd = live_web_result.spent_usd
     retrieval_base_cost_usd = live_web_result.retrieval_base_cost_usd
     retrieval_brave_cost_usd = live_web_result.retrieval_brave_cost_usd
+    retrieval_exa_cost_usd = live_web_result.retrieval_exa_cost_usd
     brave_request_count = live_web_result.brave_request_count
+    exa_web_request_count = live_web_result.exa_web_request_count
+    exa_answer_request_count = live_web_result.exa_answer_request_count
+    exa_research_request_count = live_web_result.exa_research_request_count
+    exa_content_request_count = live_web_result.exa_content_request_count
+    exa_content_piece_count = live_web_result.exa_content_piece_count
     aggregate_errors.update(live_web_result.aggregate_errors)
 
     records = _dedupe_records(live_web_result.all_records)
@@ -3992,6 +4727,24 @@ def execute_orchestration(
             synthesis_failures=synthesis_failures,
             provisional_confidence=provisional_conf,
         )
+        mcq_evidence_passed, mcq_evidence_artifacts = _mcq_selected_option_evidence_gate(
+            question=question,
+            final_text=(draft_texts[0] if draft_texts else ""),
+            stages=stages,
+        )
+        if not mcq_evidence_passed:
+            should_retry = True
+            retry_reasons = [*retry_reasons, "mcq_selected_option_evidence_weak"]
+        stages.append(
+            TraceStage(
+                name="mcq_evidence_gate",
+                status=Status.COMPLETED,
+                model="policy",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                artifacts={**mcq_evidence_artifacts, "phase": "confidence_retry"},
+            )
+        )
         stages.append(
             TraceStage(
                 name="confidence_retry_gate",
@@ -4025,12 +4778,23 @@ def execute_orchestration(
         retry_records: list[LiteratureRecord] = []
         retry_errors: dict[str, str] = {}
         retry_brave_requests = 0
+        retry_exa_web_requests = 0
+        retry_exa_answer_requests = 0
+        retry_exa_research_requests = 0
+        retry_exa_content_requests = 0
+        retry_exa_content_pieces = 0
         for query in retry_queries:
             found, errors, stats = search_literature(query, max_results=effort.retrieval_min_results)
             retry_records.extend(found)
             for source, err in errors.items():
                 retry_errors[f"{source}:{query}"] = err
-            retry_brave_requests += int((stats.get("requests_by_source") or {}).get("brave_web", 0))
+            requests_by_source = stats.get("requests_by_source") or {}
+            retry_brave_requests += int(requests_by_source.get("brave_web", 0))
+            retry_exa_web_requests += int(requests_by_source.get("exa_web", 0))
+            retry_exa_answer_requests += int(requests_by_source.get("exa_answer", 0))
+            retry_exa_research_requests += int(requests_by_source.get("exa_research", 0))
+            retry_exa_content_requests += int(requests_by_source.get("exa_content", 0))
+            retry_exa_content_pieces += int(stats.get("exa_content_pieces", 0))
         deduped_retry_records = _dedupe_records(retry_records)
         aggregate_errors.update(retry_errors)
         records = _dedupe_records([*records, *deduped_retry_records])
@@ -4050,11 +4814,23 @@ def execute_orchestration(
 
         retry_base_cost = estimate_stage_cost("retrieval", units=len(retry_queries))
         retry_brave_cost = estimate_brave_search_cost(retry_brave_requests)
-        retry_cost = retry_base_cost + retry_brave_cost
+        retry_exa_cost = estimate_exa_cost(
+            search_requests_1_25=retry_exa_web_requests,
+            content_pieces=retry_exa_content_pieces,
+            answer_requests=retry_exa_answer_requests,
+            research_search_requests=retry_exa_research_requests,
+        )
+        retry_cost = retry_base_cost + retry_brave_cost + retry_exa_cost
         spent_usd += retry_cost
         retrieval_base_cost_usd += retry_base_cost
         retrieval_brave_cost_usd += retry_brave_cost
+        retrieval_exa_cost_usd += retry_exa_cost
         brave_request_count += retry_brave_requests
+        exa_web_request_count += retry_exa_web_requests
+        exa_answer_request_count += retry_exa_answer_requests
+        exa_research_request_count += retry_exa_research_requests
+        exa_content_request_count += retry_exa_content_requests
+        exa_content_piece_count += retry_exa_content_pieces
         observability.add_stage(
             StageMetric(
                 name="retrieval_confidence_retry",
@@ -4077,6 +4853,12 @@ def execute_orchestration(
                     "documents_retrieved": len(deduped_retry_records),
                     "source_errors": retry_errors,
                     "brave_requests": retry_brave_requests,
+                    "exa_search_requests": retry_exa_web_requests,
+                    "exa_answer_requests": retry_exa_answer_requests,
+                    "exa_research_requests": retry_exa_research_requests,
+                    "exa_content_requests": retry_exa_content_requests,
+                    "exa_content_pieces": retry_exa_content_pieces,
+                    "exa_cost_usd": retry_exa_cost,
                     "estimated_cost_usd": retry_cost,
                 },
             )
@@ -4194,7 +4976,13 @@ def execute_orchestration(
         budget_stop_reason=budget_stop_reason,
         retrieval_base_cost_usd=retrieval_base_cost_usd,
         retrieval_brave_cost_usd=retrieval_brave_cost_usd,
+        retrieval_exa_cost_usd=retrieval_exa_cost_usd,
         brave_request_count=brave_request_count,
+        exa_web_request_count=exa_web_request_count,
+        exa_answer_request_count=exa_answer_request_count,
+        exa_research_request_count=exa_research_request_count,
+        exa_content_request_count=exa_content_request_count,
+        exa_content_piece_count=exa_content_piece_count,
         verifier_cost=verifier_cost,
     )
     finalization = _finalize_answer_and_quality_gates(
