@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sparkit-reboot"
+version = "0.1.0"
+description = "Accuracy-first scientific RAG reboot"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.32.0"]
+
+[project.optional-dependencies]
+benchmark = ["datasets>=2.19.0"]
+paperqa2 = ["paper-qa>=4.9.0,<5.0.0"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

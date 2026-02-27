@@ -1,0 +1,2 @@
+"""SPARKIT core package."""
+
