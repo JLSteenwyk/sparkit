@@ -1,1 +1,0 @@
-# Ingestion service app package.
