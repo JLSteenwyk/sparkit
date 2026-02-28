@@ -4,7 +4,7 @@ import os
 import re
 from dataclasses import dataclass
 
-from sparkit.evidence.schema import FederatedEvidencePack
+from sparkit.evidence.schema import EvidenceItem, FederatedEvidencePack, StudyType
 
 try:
     from openai import OpenAI
@@ -54,7 +54,17 @@ def decide_mcq_from_evidence(question: str, pack: FederatedEvidencePack) -> McqD
     if not corpus.strip():
         return McqDecision(answer_letter=None, confidence=0.0, rationale="no_evidence")
 
-    llm_decision = _decide_with_llm(question, choices, pack)
+    model = os.getenv("SPARKIT_SYNTH_MODEL", "gpt-5.2").strip() or "gpt-5.2"
+    evidence_limit = _env_int("SPARKIT_SYNTH_EVIDENCE_LIMIT", 12, minimum=1, maximum=30)
+    per_item_chars = _env_int("SPARKIT_SYNTH_EVIDENCE_CHARS", 900, minimum=200, maximum=4000)
+    llm_decision = _decide_with_llm(
+        question,
+        choices,
+        pack,
+        model=model,
+        evidence_limit=evidence_limit,
+        per_item_chars=per_item_chars,
+    )
     if llm_decision is not None:
         return llm_decision
 
@@ -66,16 +76,152 @@ def decide_mcq_from_evidence(question: str, pack: FederatedEvidencePack) -> McqD
     )
 
 
-def _decide_with_llm(question: str, choices: dict[str, str], pack: FederatedEvidencePack) -> McqDecision | None:
+def decide_mcq_fast_consensus(question: str, pack: FederatedEvidencePack) -> McqDecision:
+    stem, choices = parse_mcq(question)
+    if not choices:
+        return McqDecision(answer_letter=None, confidence=0.0, rationale="not_multiple_choice")
+
+    corpus = " ".join(
+        " ".join(
+            part
+            for part in (
+                item.claim,
+                item.title or "",
+                item.abstract or "",
+            )
+            if part
+        )
+        for item in pack.items
+    ).lower()
+    if not corpus.strip():
+        return McqDecision(answer_letter=None, confidence=0.0, rationale="no_evidence")
+
+    votes: list[tuple[str, str]] = []
+
+    heuristic = _decide_with_overlap_heuristic(stem, choices, corpus)
+    if heuristic.answer_letter:
+        votes.append(("heuristic", heuristic.answer_letter))
+
+    citation_vote = _decide_with_citation_weighted_vote(choices, pack.items)
+    if citation_vote.answer_letter:
+        votes.append(("citation_weighted", citation_vote.answer_letter))
+
+    fast_model = os.getenv("SPARKIT_FAST_JUDGE_MODEL", "gpt-5-nano").strip() or "gpt-5-nano"
+    fast_evidence_limit = _env_int("SPARKIT_FAST_EVIDENCE_LIMIT", 4, minimum=1, maximum=10)
+    fast_per_item_chars = _env_int("SPARKIT_FAST_EVIDENCE_CHARS", 320, minimum=120, maximum=1200)
+    fast_llm = _decide_with_llm(
+        question,
+        choices,
+        pack,
+        model=fast_model,
+        evidence_limit=fast_evidence_limit,
+        per_item_chars=fast_per_item_chars,
+    )
+    if fast_llm is not None and fast_llm.answer_letter:
+        votes.append(("fast_llm", fast_llm.answer_letter))
+
+    winner, count = _majority_vote(votes)
+    if winner is not None and count >= 2:
+        conf = 0.82 if count >= 3 else 0.72
+        return McqDecision(
+            answer_letter=winner,
+            confidence=conf,
+            rationale=f"fast_consensus:agree={count}/3,votes={','.join(f'{name}:{letter}' for name, letter in votes)}",
+        )
+
+    full = decide_mcq_from_evidence(question, pack)
+    return McqDecision(
+        answer_letter=full.answer_letter,
+        confidence=full.confidence,
+        rationale=f"fast_consensus_fallback:{full.rationale}",
+    )
+
+
+def decide_mcq_nano_consensus10(question: str, pack: FederatedEvidencePack) -> McqDecision:
+    stem, choices = parse_mcq(question)
+    if not choices:
+        return McqDecision(answer_letter=None, confidence=0.0, rationale="not_multiple_choice")
+
+    corpus = " ".join(
+        " ".join(
+            part
+            for part in (
+                item.claim,
+                item.title or "",
+                item.abstract or "",
+            )
+            if part
+        )
+        for item in pack.items
+    ).lower()
+    if not corpus.strip():
+        return McqDecision(answer_letter=None, confidence=0.0, rationale="no_evidence")
+
+    model = os.getenv("SPARKIT_NANO_CONSENSUS_MODEL", "gpt-5-nano").strip() or "gpt-5-nano"
+    votes_n = _env_int("SPARKIT_NANO_CONSENSUS_VOTES", 10, minimum=3, maximum=20)
+    evidence_limit = _env_int("SPARKIT_NANO_CONSENSUS_EVIDENCE_LIMIT", 5, minimum=1, maximum=12)
+    per_item_chars = _env_int("SPARKIT_NANO_CONSENSUS_EVIDENCE_CHARS", 320, minimum=120, maximum=1200)
+    temperature = _env_float("SPARKIT_NANO_CONSENSUS_TEMP", 0.7, minimum=0.0, maximum=1.5)
+
+    votes: list[str] = []
+    for _ in range(votes_n):
+        decision = _decide_with_llm(
+            question,
+            choices,
+            pack,
+            model=model,
+            evidence_limit=evidence_limit,
+            per_item_chars=per_item_chars,
+            temperature=temperature,
+        )
+        if decision is not None and decision.answer_letter:
+            votes.append(decision.answer_letter)
+
+    if not votes:
+        fallback = decide_mcq_from_evidence(question, pack)
+        return McqDecision(
+            answer_letter=fallback.answer_letter,
+            confidence=fallback.confidence,
+            rationale=f"nano_consensus10_fallback:{fallback.rationale}",
+        )
+
+    counts: dict[str, int] = {}
+    for letter in votes:
+        counts[letter] = counts.get(letter, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+    winner, winner_count = ranked[0]
+    tie = len(ranked) > 1 and ranked[1][1] == winner_count
+    if tie:
+        fallback = decide_mcq_from_evidence(question, pack)
+        return McqDecision(
+            answer_letter=fallback.answer_letter,
+            confidence=fallback.confidence,
+            rationale=f"nano_consensus10_tie_fallback:{fallback.rationale}",
+        )
+
+    conf = _clamp(winner_count / max(1, len(votes)), 0.35, 0.98)
+    return McqDecision(
+        answer_letter=winner,
+        confidence=conf,
+        rationale=f"nano_consensus10:model={model},votes={len(votes)},winner={winner},count={winner_count}",
+    )
+
+
+def _decide_with_llm(
+    question: str,
+    choices: dict[str, str],
+    pack: FederatedEvidencePack,
+    *,
+    model: str,
+    evidence_limit: int,
+    per_item_chars: int,
+    temperature: float = 0.0,
+) -> McqDecision | None:
     if OpenAI is None:
         return None
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         return None
-
-    model = os.getenv("SPARKIT_SYNTH_MODEL", "gpt-5.2").strip() or "gpt-5.2"
-    evidence_limit = _env_int("SPARKIT_SYNTH_EVIDENCE_LIMIT", 12, minimum=1, maximum=30)
-    per_item_chars = _env_int("SPARKIT_SYNTH_EVIDENCE_CHARS", 900, minimum=200, maximum=4000)
 
     evidence_lines: list[str] = []
     for idx, item in enumerate(pack.items[:evidence_limit], start=1):
@@ -115,7 +261,7 @@ def _decide_with_llm(question: str, choices: dict[str, str], pack: FederatedEvid
                 {"role": "system", "content": "Answer carefully and obey output format exactly."},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0,
+            temperature=temperature,
         )
         content = (response.choices[0].message.content or "").strip()
     except Exception:  # noqa: BLE001
@@ -135,6 +281,64 @@ def _decide_with_llm(question: str, choices: dict[str, str], pack: FederatedEvid
         confidence=confidence,
         rationale=f"llm_synth:model={model},evidence={len(evidence_lines)}",
     )
+
+
+def _decide_with_citation_weighted_vote(choices: dict[str, str], items: list[EvidenceItem]) -> McqDecision:
+    if not items:
+        return McqDecision(answer_letter=None, confidence=0.0, rationale="no_items")
+
+    scores: dict[str, float] = {label: 0.0 for label in choices}
+    for item in items:
+        text_blob = " ".join(part for part in (item.claim, item.title or "", item.abstract or "") if part).lower()
+        if not text_blob.strip():
+            continue
+        item_weight = _item_quality_weight(item)
+        for label, choice_text in choices.items():
+            tks = _tokens(choice_text)
+            if not tks:
+                continue
+            overlap = len(tks & _tokens(text_blob)) / max(1, len(tks))
+            scores[label] += item_weight * overlap
+
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    if not ranked:
+        return McqDecision(answer_letter=None, confidence=0.0, rationale="no_ranked")
+    top_label, top_score = ranked[0]
+    runner = ranked[1][1] if len(ranked) > 1 else 0.0
+    margin = max(0.0, top_score - runner)
+    conf = max(0.2, min(0.85, 0.45 + margin))
+    return McqDecision(answer_letter=top_label, confidence=conf, rationale=f"citation_top={top_score:.3f},margin={margin:.3f}")
+
+
+def _item_quality_weight(item: EvidenceItem) -> float:
+    study_weight = {
+        StudyType.META_ANALYSIS: 1.00,
+        StudyType.SYSTEMATIC_REVIEW: 0.95,
+        StudyType.RANDOMIZED_TRIAL: 0.90,
+        StudyType.OBSERVATIONAL: 0.78,
+        StudyType.PRECLINICAL: 0.62,
+        StudyType.CASE_REPORT: 0.55,
+        StudyType.PREPRINT: 0.40,
+        StudyType.UNKNOWN: 0.55,
+    }[item.study_type]
+    provider_weight = {
+        "paperqa2": 1.00,
+        "scite": 0.95,
+        "exa": 0.90,
+        "consensus": 0.92,
+        "elicit": 0.92,
+    }.get(item.provider, 0.85)
+    return max(0.0, min(1.0, item.confidence)) * study_weight * provider_weight
+
+
+def _majority_vote(votes: list[tuple[str, str]]) -> tuple[str | None, int]:
+    if not votes:
+        return None, 0
+    counts: dict[str, int] = {}
+    for _, letter in votes:
+        counts[letter] = counts.get(letter, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+    return ranked[0][0], ranked[0][1]
 
 
 def _decide_with_overlap_heuristic(stem: str, choices: dict[str, str], corpus: str) -> McqDecision:
@@ -172,6 +376,17 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
         return default
     try:
         value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
+
+
+def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
     except ValueError:
         return default
     return max(minimum, min(maximum, value))

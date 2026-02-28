@@ -43,16 +43,22 @@ pip install -e .[paperqa2]
 
 PaperQA2 adapter runtime note:
 - Set `PAPERQA_PAPER_DIRECTORY` to a local paper corpus/index directory before using the PaperQA2 provider.
-- Bootstrap a local corpus quickly (using Exa search snippets):
+- Bootstrap a local corpus quickly (Exa + arXiv + bioRxiv):
 
 ```bash
 python scripts_build_paperqa_directory.py \
   --questions benchmarks/hle_gold/questions_full.json \
   --output-dir data/paperqa_papers \
   --max-questions 50 \
-  --results-per-question 8
+  --results-per-question 8 \
+  --arxiv-per-question 3 \
+  --biorxiv-per-question 3
 export PAPERQA_PAPER_DIRECTORY="$(pwd)/data/paperqa_papers"
 ```
+
+Notes:
+- `--include-exa`, `--include-arxiv`, and `--include-biorxiv` can be used to force specific source subsets.
+- If no `--include-*` flags are provided, the builder enables all three by default.
 
 Exa adapter runtime note:
 - Set `EXA_API_KEY` to enable Exa-backed retrieval.
@@ -64,6 +70,15 @@ Synthesis runtime note (MCQ answering):
   - `SPARKIT_SYNTH_EVIDENCE_LIMIT` (default: `12`)
   - `SPARKIT_SYNTH_EVIDENCE_CHARS` (default: `900` per evidence item)
 - If LLM synthesis fails, SPARKIT automatically falls back to heuristic overlap scoring.
+- Optional low-latency mode: `--decision-mode fast_consensus` in `scripts_benchmark_hle_gold.py`
+  - Three quick votes (heuristic, citation-weighted, tiny LLM judge) run first.
+  - If at least 2 votes agree, return immediately.
+  - Otherwise, fall back to full LLM synthesis.
+  - Tiny judge model defaults to `SPARKIT_FAST_JUDGE_MODEL=gpt-5-nano`.
+- Optional mode: `--decision-mode nano_consensus10`
+  - Runs 10 tiny-LLM votes (`gpt-5-nano` by default) and returns majority answer.
+  - Falls back to full synthesis on tie or no valid votes.
+  - Tunables: `SPARKIT_NANO_CONSENSUS_*` env vars.
 
 Federation runtime note (retrieval + reranking):
 - `build_evidence_pack` now performs MCQ-aware multi-query retrieval by default:

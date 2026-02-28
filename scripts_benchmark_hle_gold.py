@@ -3,11 +3,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sparkit.orchestrator.answering import decide_mcq_from_evidence, parse_mcq
+from sparkit.orchestrator.answering import (
+    decide_mcq_fast_consensus,
+    decide_mcq_from_evidence,
+    decide_mcq_nano_consensus10,
+    parse_mcq,
+)
 from sparkit.orchestrator.federation import FederationConfig, build_evidence_pack
 from sparkit.providers.consensus import ConsensusProvider
 from sparkit.providers.elicit import ElicitProvider
@@ -40,6 +46,7 @@ def main() -> None:
     parser.add_argument("--max-query-variants", type=int, default=6)
     parser.add_argument("--output-dir", default="benchmarks/results")
     parser.add_argument("--label", default="hle_gold_mvp")
+    parser.add_argument("--decision-mode", choices=["llm", "fast_consensus", "nano_consensus10"], default="llm")
     args = parser.parse_args()
 
     questions = json.loads(Path(args.questions).read_text())
@@ -57,6 +64,7 @@ def main() -> None:
     predictions = []
     correct = 0
     scored = 0
+    t0 = time.monotonic()
 
     for row in questions:
         qid = str(row.get("id"))
@@ -80,7 +88,12 @@ def main() -> None:
             continue
 
         pack = build_evidence_pack(question=question, providers=providers, config=cfg)
-        decision = decide_mcq_from_evidence(question, pack)
+        if args.decision_mode == "fast_consensus":
+            decision = decide_mcq_fast_consensus(question, pack)
+        elif args.decision_mode == "nano_consensus10":
+            decision = decide_mcq_nano_consensus10(question, pack)
+        else:
+            decision = decide_mcq_from_evidence(question, pack)
         answer_text = f"<answer>{decision.answer_letter}</answer>" if decision.answer_letter else ""
         is_correct = 1 if (decision.answer_letter or "") == correct_answer else 0
         scored += 1
@@ -99,6 +112,7 @@ def main() -> None:
         )
 
     avg_score = (correct / scored) if scored else 0.0
+    runtime_seconds = round(time.monotonic() - t0, 3)
     now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = Path(args.output_dir) / f"{args.label}_{now}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -110,13 +124,27 @@ def main() -> None:
                 "num_scored_mcq": scored,
                 "correct": correct,
                 "average_score": avg_score,
+                "runtime_seconds": runtime_seconds,
                 "providers": [provider.name for provider in providers],
+                "decision_mode": args.decision_mode,
                 "config": asdict(cfg),
             },
             indent=2,
         )
     )
-    print(json.dumps({"output_dir": str(out_dir), "average_score": avg_score, "correct": correct, "scored": scored}, indent=2))
+    print(
+        json.dumps(
+            {
+                "output_dir": str(out_dir),
+                "average_score": avg_score,
+                "correct": correct,
+                "scored": scored,
+                "runtime_seconds": runtime_seconds,
+                "decision_mode": args.decision_mode,
+            },
+            indent=2,
+        )
+    )
 
 
 def _extract_correct_letter(value: object) -> str:
