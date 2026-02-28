@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -79,11 +80,23 @@ class PaperQA2Provider:
         return items
 
     def _get_docs(self, paper_dir: str) -> Any | None:
-        cached = self._docs_cache.get(paper_dir)
+        llm_model = os.getenv("PAPERQA_LLM_MODEL", "").strip() or "gpt-4-0125-preview"
+        if llm_model.startswith("gpt-5"):
+            # paper-qa 4.9.0 uses a completions-style path for this adapter flow.
+            # gpt-5 chat models are incompatible there, so force a known-good fallback.
+            fallback = "gpt-4-0125-preview"
+            print(
+                f"[paperqa2] PAPERQA_LLM_MODEL={llm_model} is incompatible with paper-qa adapter path; "
+                f"falling back to {fallback}",
+                file=sys.stderr,
+            )
+            llm_model = fallback
+        cache_key = f"{paper_dir}::{llm_model}"
+        cached = self._docs_cache.get(cache_key)
         if cached is not None:
             return cached
         try:
-            docs = Docs()
+            docs = Docs(llm=llm_model)
             root = Path(paper_dir)
             if not root.exists() or not root.is_dir():
                 return None
@@ -100,7 +113,7 @@ class PaperQA2Provider:
                     docs.add(path)
                 except Exception:  # noqa: BLE001
                     continue
-            self._docs_cache[paper_dir] = docs
+            self._docs_cache[cache_key] = docs
             return docs
         except Exception:  # noqa: BLE001
             return None

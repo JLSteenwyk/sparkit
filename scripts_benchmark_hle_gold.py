@@ -36,6 +36,8 @@ def main() -> None:
     parser.add_argument("--max-questions", type=int, default=0)
     parser.add_argument("--top-k", type=int, default=30)
     parser.add_argument("--provider-max-items", type=int, default=20)
+    parser.add_argument("--enable-mcq-option-queries", action="store_true")
+    parser.add_argument("--max-query-variants", type=int, default=6)
     parser.add_argument("--output-dir", default="benchmarks/results")
     parser.add_argument("--label", default="hle_gold_mvp")
     args = parser.parse_args()
@@ -45,7 +47,12 @@ def main() -> None:
         questions = questions[: args.max_questions]
 
     providers = [_provider_factory(name.strip()) for name in args.providers.split(",") if name.strip()]
-    cfg = FederationConfig(top_k=args.top_k, provider_max_items=args.provider_max_items)
+    cfg = FederationConfig(
+        top_k=args.top_k,
+        provider_max_items=args.provider_max_items,
+        enable_mcq_option_queries=bool(args.enable_mcq_option_queries),
+        max_query_variants=args.max_query_variants,
+    )
 
     predictions = []
     correct = 0

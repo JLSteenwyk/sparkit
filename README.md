@@ -57,6 +57,27 @@ export PAPERQA_PAPER_DIRECTORY="$(pwd)/data/paperqa_papers"
 Exa adapter runtime note:
 - Set `EXA_API_KEY` to enable Exa-backed retrieval.
 
+Synthesis runtime note (MCQ answering):
+- `decide_mcq_from_evidence` now defaults to LLM synthesis over top ranked evidence.
+- Set `SPARKIT_SYNTH_MODEL` (default: `gpt-5.2`).
+- Optional controls:
+  - `SPARKIT_SYNTH_EVIDENCE_LIMIT` (default: `12`)
+  - `SPARKIT_SYNTH_EVIDENCE_CHARS` (default: `900` per evidence item)
+- If LLM synthesis fails, SPARKIT automatically falls back to heuristic overlap scoring.
+
+Federation runtime note (retrieval + reranking):
+- `build_evidence_pack` now performs MCQ-aware multi-query retrieval by default:
+  - base stem query
+  - additional per-option query variants
+- Retrieved evidence is deduplicated and reranked before synthesis using:
+  - evidence quality score
+  - lexical relevance to stem
+  - option-specific overlap
+  - provider prior
+- `FederationConfig` knobs:
+  - `enable_mcq_option_queries` (default: `True`)
+  - `max_query_variants` (default: `6`)
+
 4. Run local federation smoke:
 
 ```bash
